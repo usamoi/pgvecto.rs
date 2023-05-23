@@ -32,7 +32,7 @@ impl Build {
     pub fn build_insert(&mut self, vector: &[Scalar], heap_pointer: HeapPointer) {
         let mut table = unsafe { Table::new(self.relation, GrandLocking::Exclusive) };
         assert_ne!(table.pages(), 0);
-        let level = rand::random::<u32>().trailing_zeros() as u8;
+        let level = rand::random::<u32>().trailing_zeros() as u8 / 4;
         let mut layers = vec![Vec::<Pointer>::new(); 1 + level as usize];
         let start_vectors;
         let start_level;
@@ -109,7 +109,7 @@ pub fn search(relation: pgrx::pg_sys::Relation, vector: &[Scalar], k: usize) -> 
 
 pub fn insert(relation: pgrx::pg_sys::Relation, vector: &[Scalar], heap_pointer: HeapPointer) {
     let mut table = unsafe { Table::new(relation, GrandLocking::Exclusive) };
-    let level = rand::random::<u32>().trailing_zeros() as u8;
+    let level = rand::random::<u32>().trailing_zeros() as u8 / 4;
     let mut layers = vec![Vec::<Pointer>::new(); 1 + level as usize];
     let start_vectors;
     let start_level;

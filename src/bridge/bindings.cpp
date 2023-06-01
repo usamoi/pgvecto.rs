@@ -9,7 +9,7 @@ public:
     hnswlib::HierarchicalNSW<float> *algo;
     Binding(size_t dim, size_t max_elements) {
         space = new hnswlib::L2Space(dim);
-        algo = new hnswlib::HierarchicalNSW<float>(space, max_elements, 16, 200);
+        algo = new hnswlib::HierarchicalNSW<float>(space, max_elements, 64, 500);
     }
     Binding(size_t dim, const std::string &location) {
         space = new hnswlib::L2Space(dim);

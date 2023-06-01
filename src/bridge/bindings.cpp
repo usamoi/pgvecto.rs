@@ -5,14 +5,14 @@
 
 class Binding {
 public:
-    hnswlib::L2Space *space;
+    hnswlib::InnerProductSpace *space;
     hnswlib::HierarchicalNSW<float> *algo;
     Binding(size_t dim, size_t max_elements) {
-        space = new hnswlib::L2Space(dim);
+        space = new hnswlib::InnerProductSpace(dim);
         algo = new hnswlib::HierarchicalNSW<float>(space, max_elements, 64, 500);
     }
     Binding(size_t dim, const std::string &location) {
-        space = new hnswlib::L2Space(dim);
+        space = new hnswlib::InnerProductSpace(dim);
         algo = new hnswlib::HierarchicalNSW<float>(space, location);
     }
     ~Binding() {
@@ -45,7 +45,7 @@ fn binding_insert(Binding *self, const uint8_t *data, size_t label) {
     self->algo->addPoint(data, label);
 }
 
-fn binding_search(Binding *self, const uint8_t *data, size_t k) -> rust::Vec<size_t> {
+fn binding_search(Binding *self, const uint8_t *data, size_t k)->rust::Vec<size_t> {
     let cxx = self->algo->searchKnnCloserFirst(data, k);
     let rust = rust::Vec<size_t>();
     for (let x : cxx) {

@@ -1,15 +1,16 @@
 mod implementation;
 mod semaphore;
-mod slab;
 mod visited;
 
-use crate::prelude::Algorithm0;
-use crate::prelude::Algorithm1;
+use super::Algorithm0;
+use super::Algorithm1;
+use crate::memory::ContextPtr;
+use crate::prelude::BincodeDeserialize;
+use crate::prelude::BincodeSerialize;
 use crate::prelude::Options;
 use crate::prelude::Scalar;
 use implementation::Implementation;
-use std::alloc::Allocator;
-use std::path::Path;
+use crate::memory::Address;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HnswOptions {
@@ -48,18 +49,25 @@ impl HnswOptions {
     }
 }
 
-pub struct Hnsw<A: Allocator> {
-    implementation: Implementation<A>,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HnswForever {
+    options: Options,
+    blocks: Vec<usize>,
+    address: Address,
 }
 
-impl<A: Allocator + Sync> Algorithm0 for Hnsw<A> {
-    type Allocator = A;
+pub struct Hnsw {
+    implementation: Implementation,
+}
 
+impl Algorithm0 for Hnsw {
+    const BLOCKS: usize = 2;
     fn build(
         options: Options,
         data: async_channel::Receiver<(Vec<Scalar>, u64)>,
-        allocator: A,
-    ) -> anyhow::Result<Self> {
+        blocks: Vec<usize>,
+        context: ContextPtr,
+    ) -> anyhow::Result<(Self, Vec<u8>)> {
         let hnsw_options = serde_json::from_str::<HnswOptions>(&options.options_algorithm)?;
         let implementation = Implementation::new(
             options.dims,
@@ -69,8 +77,9 @@ impl<A: Allocator + Sync> Algorithm0 for Hnsw<A> {
             hnsw_options.m,
             hnsw_options.ef_construction,
             hnsw_options.max_level,
-            allocator,
-        );
+            blocks.clone(),
+            context,
+        )?;
         std::thread::scope(|scope| -> anyhow::Result<()> {
             let (tx, rx) = crossbeam::channel::bounded::<(Vec<Scalar>, u64)>(65536);
             let mut handles = vec![];
@@ -111,28 +120,30 @@ impl<A: Allocator + Sync> Algorithm0 for Hnsw<A> {
             }
             anyhow::Result::Ok(())
         })?;
-        Ok(Self { implementation })
+        let forever = HnswForever { options, blocks, address: implementation.root.address() };
+        Ok((Self { implementation }, forever.serialize()?))
     }
 
-    fn load(options: Options, path: impl AsRef<Path>, allocator: A) -> anyhow::Result<Self> {
+    fn load(forever: Vec<u8>, context: ContextPtr) -> anyhow::Result<Self> {
+        let HnswForever { options, blocks, address } = forever.deserialize()?;
         let hnsw_options = serde_json::from_str::<HnswOptions>(&options.options_algorithm)?;
         let implementation = Implementation::load(
+            options.distance,
+            options.dims,
+            hnsw_options.capacity,
             hnsw_options.max_threads,
             hnsw_options.m,
             hnsw_options.ef_construction,
             hnsw_options.max_level,
-            path,
-            allocator,
+            blocks,
+            address,
+            context,
         )?;
         Ok(Self { implementation })
     }
 }
 
-impl<A: Allocator> Algorithm1 for Hnsw<A> {
-    fn save(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        self.implementation.save(path)
-    }
-
+impl Algorithm1 for Hnsw {
     fn insert(&self, insert: (Vec<Scalar>, u64)) -> anyhow::Result<()> {
         self.implementation.insert(insert)
     }

@@ -4,12 +4,20 @@
 #![feature(allocator_api)]
 #![feature(try_blocks)]
 #![feature(async_fn_in_trait)]
+#![feature(auto_traits)]
+#![feature(negative_impls)]
+#![feature(ptr_metadata)]
+#![feature(vec_into_raw_parts)]
+#![feature(thread_local)]
+#![feature(unsize)]
+#![feature(is_sorted)]
 
 use pgrx::prelude::*;
 
+mod algorithms;
 mod bgworker;
 mod embedding;
-mod hnsw;
+mod memory;
 mod postgres;
 mod prelude;
 mod udf;
@@ -32,9 +40,7 @@ pub unsafe extern "C" fn _PG_init() {
         .enable_spi_access()
         .enable_shmem_access(None)
         .load();
-    postgres::gucs::init();
-    postgres::index::init();
-    postgres::hooks::init();
+    self::postgres::init();
 }
 
 /// This module is required by `cargo pgrx test` invocations.

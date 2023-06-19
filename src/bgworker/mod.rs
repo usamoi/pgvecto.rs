@@ -5,7 +5,7 @@ mod wal;
 pub use session::Client;
 
 use self::index::Load;
-use crate::postgres::gucs::BGWORKER_PORT;
+use crate::postgres::BGWORKER_PORT;
 use crate::prelude::Id;
 use dashmap::DashMap;
 use index::Index;
@@ -54,7 +54,7 @@ extern "C" fn pgvectors_main(_arg: pgrx::pg_sys::Datum) -> ! {
             while let Ok((stream, _)) = listener.accept().await {
                 tokio::task::spawn(async move {
                     if let Err(e) = session::server_main(stream).await {
-                        log::error!("Session panickied. {}", e);
+                        log::error!("Session panickied. {}. {}", e, e.backtrace());
                     }
                 });
             }

@@ -1,10 +1,8 @@
-use crate::hnsw::Hnsw;
 use serde::{Deserialize, Serialize};
-use std::{alloc::Global, path::Path};
 
 pub type Scalar = f32;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum Error {
     #[error("The index is broken.")]
     IndexIsBroken,
@@ -14,9 +12,7 @@ pub enum Error {
     BuildOptionIsInvaild,
 }
 
-#[derive(
-    Debug, Clone, Copy, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Id {
     pub newtype: u32,
 }
@@ -40,7 +36,7 @@ impl Id {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pointer {
     pub newtype: u64,
 }
@@ -71,15 +67,15 @@ impl Pointer {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Options {
     pub dims: u16,
+    pub distance: Distance,
     pub algorithm: String,
     pub options_algorithm: String,
-    pub distance: Distance,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Distance {
     L2,
     Cosine,
@@ -119,93 +115,6 @@ impl Distance {
                 1.0 - dot
             }
         }
-    }
-}
-
-pub trait Algorithm0: Sized {
-    type Allocator;
-    fn build(
-        options: Options,
-        data: async_channel::Receiver<(Vec<Scalar>, u64)>,
-        allocator: Self::Allocator,
-    ) -> anyhow::Result<Self>;
-    fn load(
-        options: Options,
-        path: impl AsRef<Path>,
-        allocator: Self::Allocator,
-    ) -> anyhow::Result<Self>;
-}
-
-pub trait Algorithm1 {
-    fn save(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()>;
-    fn insert(&self, insert: (Vec<Scalar>, u64)) -> anyhow::Result<()>;
-    fn search(&self, search: (Vec<Scalar>, usize)) -> anyhow::Result<Vec<(Scalar, u64)>>;
-}
-
-pub trait Algorithm: Algorithm0 + Algorithm1 {}
-
-impl<T: Algorithm0 + Algorithm1> Algorithm for T {}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Algo0 {
-    Hnsw,
-}
-
-impl Algo0 {
-    pub fn new(name: &str) -> anyhow::Result<Self> {
-        match name {
-            "HNSW" => Ok(Self::Hnsw),
-            _ => anyhow::bail!(Error::BuildOptionIsInvaild),
-        }
-    }
-    pub async fn build(
-        self,
-        options: Options,
-        data: async_channel::Receiver<(Vec<Scalar>, u64)>,
-    ) -> anyhow::Result<Algo1> {
-        tokio::task::block_in_place(|| {
-            Ok(match self {
-                Self::Hnsw => Hnsw::build(options, data, Global)?.into(),
-            })
-        })
-    }
-    pub async fn load(self, options: Options, path: impl AsRef<Path>) -> anyhow::Result<Algo1> {
-        tokio::task::block_in_place(|| {
-            Ok(match self {
-                Self::Hnsw => Hnsw::load(options, path, Global)?.into(),
-            })
-        })
-    }
-}
-
-pub enum Algo1 {
-    Hnsw(Hnsw<Global>),
-}
-
-impl From<Hnsw<Global>> for Algo1 {
-    fn from(value: Hnsw<Global>) -> Self {
-        Self::Hnsw(value)
-    }
-}
-
-impl Algo1 {
-    pub async fn save(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        use Algo1::*;
-        tokio::task::block_in_place(|| match self {
-            Hnsw(x) => x.save(path),
-        })
-    }
-    pub async fn insert(&self, insert: (Vec<Scalar>, u64)) -> anyhow::Result<()> {
-        use Algo1::*;
-        tokio::task::block_in_place(|| match self {
-            Hnsw(x) => x.insert(insert),
-        })
-    }
-    pub async fn search(&self, search: (Vec<Scalar>, usize)) -> anyhow::Result<Vec<(Scalar, u64)>> {
-        use Algo1::*;
-        tokio::task::block_in_place(|| match self {
-            Hnsw(x) => x.search(search),
-        })
     }
 }
 

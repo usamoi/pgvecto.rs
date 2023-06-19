@@ -1,4 +1,5 @@
-use crate::postgres::Scalar;
+use crate::prelude::Distance;
+use crate::prelude::Scalar;
 use pgrx::pg_sys::Datum;
 use pgrx::pg_sys::Oid;
 use pgrx::pgrx_sql_entity_graph::metadata::ArgumentError;
@@ -74,37 +75,27 @@ CREATE TYPE vector (
     INPUT     = vector_in,
     OUTPUT    = vector_out,
     TYPMOD_IN = vector_typmod_in,
-    STORAGE   = plain,
+    TYPMOD_OUT = vector_typmod_out,
+    STORAGE   = EXTENDED,
     INTERNALLENGTH = VARIABLE,
     ALIGNMENT = double
 );
 "#,
     name = "vector",
     creates = [Type(Vector)],
-    requires = [vector_in, vector_out, vector_typmod_in],
+    requires = [vector_in, vector_out, vector_typmod_in, vector_typmod_out],
 );
-// todo: "extend" storage and TOAST
-
-const MAGIC: u32 = 0xc9fc554b;
 
 #[repr(C, align(8))]
 pub struct Vector {
-    // forced by postgres
-    header: [u8; 4],
-    // debugging
-    magic: u32,
-    // data
+    varlena: u32,
     len: u16,
     phantom: [Scalar; 0],
 }
 
-static_assertions::const_assert_eq!(0x1u16, unsafe {
-    std::mem::transmute::<[u8; 2], u16>([1, 0])
-});
-
 impl Vector {
-    fn header(size: usize) -> [u8; 4] {
-        ((size << 2) as u32).to_le_bytes()
+    fn varlena(size: usize) -> u32 {
+        (size << 2) as u32
     }
     fn layout(len: usize) -> Layout {
         u16::try_from(len).ok().expect("Vector is too large.");
@@ -118,23 +109,21 @@ impl Vector {
             assert!(u16::try_from(slice.len()).is_ok());
             let layout = Vector::layout(slice.len());
             let ptr = std::alloc::Global.allocate(layout).unwrap().as_ptr() as *mut Vector;
-            std::ptr::addr_of_mut!((*ptr).header).write(Vector::header(layout.size()));
-            std::ptr::addr_of_mut!((*ptr).magic).write(MAGIC);
+            std::ptr::addr_of_mut!((*ptr).varlena).write(Vector::varlena(layout.size()));
             std::ptr::addr_of_mut!((*ptr).len).write(slice.len() as u16);
             std::ptr::copy_nonoverlapping(slice.as_ptr(), (*ptr).phantom.as_mut_ptr(), slice.len());
             Box::from_raw(ptr)
         }
     }
-    pub fn new_in_postgres(slice: &[Scalar]) -> PgVector {
+    pub fn new_in_postgres(slice: &[Scalar]) -> VectorOutput {
         unsafe {
             assert!(u16::try_from(slice.len()).is_ok());
             let layout = Vector::layout(slice.len());
             let ptr = pgrx::pg_sys::palloc(layout.size()) as *mut Vector;
-            std::ptr::addr_of_mut!((*ptr).header).write(Vector::header(layout.size()));
-            std::ptr::addr_of_mut!((*ptr).magic).write(MAGIC);
+            std::ptr::addr_of_mut!((*ptr).varlena).write(Vector::varlena(layout.size()));
             std::ptr::addr_of_mut!((*ptr).len).write(slice.len() as u16);
             std::ptr::copy_nonoverlapping(slice.as_ptr(), (*ptr).phantom.as_mut_ptr(), slice.len());
-            PgVector(NonNull::new(ptr).unwrap())
+            VectorOutput(NonNull::new(ptr).unwrap())
         }
     }
     pub fn new_zeroed(len: usize) -> Box<Self> {
@@ -142,40 +131,38 @@ impl Vector {
             assert!(u16::try_from(len).is_ok());
             let layout = Vector::layout(len);
             let ptr = std::alloc::Global.allocate_zeroed(layout).unwrap().as_ptr() as *mut Vector;
-            std::ptr::addr_of_mut!((*ptr).header).write(Vector::header(layout.size()));
-            std::ptr::addr_of_mut!((*ptr).magic).write(MAGIC);
+            std::ptr::addr_of_mut!((*ptr).varlena).write(Vector::varlena(layout.size()));
             std::ptr::addr_of_mut!((*ptr).len).write(len as u16);
             Box::from_raw(ptr)
         }
     }
-    pub fn new_zeroed_in_postgres(len: usize) -> PgVector {
+    #[allow(dead_code)]
+    pub fn new_zeroed_in_postgres(len: usize) -> VectorOutput {
         unsafe {
             assert!(u64::try_from(len).is_ok());
             let layout = Vector::layout(len);
             let ptr = pgrx::pg_sys::palloc0(layout.size()) as *mut Vector;
-            std::ptr::addr_of_mut!((*ptr).header).write(Vector::header(layout.size()));
-            std::ptr::addr_of_mut!((*ptr).magic).write(MAGIC);
+            std::ptr::addr_of_mut!((*ptr).varlena).write(Vector::varlena(layout.size()));
             std::ptr::addr_of_mut!((*ptr).len).write(len as u16);
-            PgVector(NonNull::new(ptr).unwrap())
+            VectorOutput(NonNull::new(ptr).unwrap())
         }
     }
     pub fn len(&self) -> usize {
         self.len as usize
     }
     pub fn data(&self) -> &[Scalar] {
-        debug_assert_eq!(self.header[0] & 3, 0);
-        debug_assert_eq!(self.magic, MAGIC);
+        debug_assert_eq!(self.varlena & 3, 0);
         unsafe { std::slice::from_raw_parts(self.phantom.as_ptr(), self.len as usize) }
     }
     pub fn data_mut(&mut self) -> &mut [Scalar] {
-        debug_assert_eq!(self.header[0] & 3, 0);
-        debug_assert_eq!(self.magic, MAGIC);
+        debug_assert_eq!(self.varlena & 3, 0);
         unsafe { std::slice::from_raw_parts_mut(self.phantom.as_mut_ptr(), self.len as usize) }
     }
-    pub fn copy_into_box(&self) -> Box<Vector> {
+    #[allow(dead_code)]
+    pub fn copy(&self) -> Box<Vector> {
         Vector::new(self.data())
     }
-    pub fn copy_into_postgres(&self) -> PgVector {
+    pub fn copy_into_postgres(&self) -> VectorOutput {
         Vector::new_in_postgres(self.data())
     }
 }
@@ -227,7 +214,7 @@ impl PartialEq for Vector {
         }
         let n = self.len();
         for i in 0..n {
-            if !self[i].total_cmp(&other[i]).is_eq() {
+            if self[i] != other[i] {
                 return false;
             }
         }
@@ -259,22 +246,44 @@ impl Ord for Vector {
     }
 }
 
-#[repr(C)]
-pub struct PgVector(NonNull<Vector>);
+pub enum VectorInput<'a> {
+    Owned(VectorOutput),
+    Borrowed(&'a Vector),
+}
 
-impl PgVector {
+impl<'a> VectorInput<'a> {
+    pub unsafe fn new(p: NonNull<Vector>) -> Self {
+        let q = NonNull::new(pgrx::pg_sys::pg_detoast_datum(p.cast().as_ptr()).cast()).unwrap();
+        if p != q {
+            VectorInput::Owned(VectorOutput(q))
+        } else {
+            VectorInput::Borrowed(p.as_ref())
+        }
+    }
+}
+
+impl Deref for VectorInput<'_> {
+    type Target = Vector;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            VectorInput::Owned(x) => x,
+            VectorInput::Borrowed(x) => x,
+        }
+    }
+}
+
+pub struct VectorOutput(NonNull<Vector>);
+
+impl VectorOutput {
     pub fn into_raw(self) -> *mut Vector {
         let result = self.0.as_ptr();
         std::mem::forget(self);
         result
     }
-
-    pub unsafe fn from_raw(raw: *mut Vector) -> Self {
-        Self(NonNull::new(raw).unwrap())
-    }
 }
 
-impl Deref for PgVector {
+impl Deref for VectorOutput {
     type Target = Vector;
 
     fn deref(&self) -> &Self::Target {
@@ -282,13 +291,13 @@ impl Deref for PgVector {
     }
 }
 
-impl DerefMut for PgVector {
+impl DerefMut for VectorOutput {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.as_mut() }
     }
 }
 
-impl Drop for PgVector {
+impl Drop for VectorOutput {
     fn drop(&mut self) {
         unsafe {
             pgrx::pg_sys::pfree(self.0.as_ptr() as _);
@@ -296,37 +305,18 @@ impl Drop for PgVector {
     }
 }
 
-impl FromDatum for &Vector {
+impl<'a> FromDatum for VectorInput<'a> {
     unsafe fn from_polymorphic_datum(datum: Datum, is_null: bool, _typoid: Oid) -> Option<Self> {
         if is_null {
             None
         } else {
-            Some(&*datum.cast_mut_ptr())
+            let ptr = NonNull::new(datum.cast_mut_ptr::<Vector>()).unwrap();
+            Some(VectorInput::new(ptr))
         }
     }
 }
 
-impl FromDatum for PgVector {
-    unsafe fn from_polymorphic_datum(datum: Datum, is_null: bool, _typoid: Oid) -> Option<Self> {
-        if is_null {
-            None
-        } else {
-            Some(PgVector::from_raw(datum.cast_mut_ptr()))
-        }
-    }
-}
-
-impl IntoDatum for &Vector {
-    fn into_datum(self) -> Option<Datum> {
-        Some(Datum::from(self as *const _ as *const ()))
-    }
-
-    fn type_oid() -> Oid {
-        pgrx::wrappers::regtypein("vector")
-    }
-}
-
-impl IntoDatum for PgVector {
+impl IntoDatum for VectorOutput {
     fn into_datum(self) -> Option<Datum> {
         Some(Datum::from(self.into_raw() as *mut ()))
     }
@@ -336,7 +326,7 @@ impl IntoDatum for PgVector {
     }
 }
 
-unsafe impl SqlTranslatable for &Vector {
+unsafe impl SqlTranslatable for VectorInput<'_> {
     fn argument_sql() -> Result<SqlMapping, ArgumentError> {
         Ok(SqlMapping::As(String::from("vector")))
     }
@@ -345,7 +335,7 @@ unsafe impl SqlTranslatable for &Vector {
     }
 }
 
-unsafe impl SqlTranslatable for PgVector {
+unsafe impl SqlTranslatable for VectorOutput {
     fn argument_sql() -> Result<SqlMapping, ArgumentError> {
         Ok(SqlMapping::As(String::from("vector")))
     }
@@ -355,7 +345,7 @@ unsafe impl SqlTranslatable for PgVector {
 }
 
 #[pgrx::pg_extern(immutable, parallel_safe, strict)]
-fn vector_in(input: &CStr, _oid: Oid, _typmod: i32) -> PgVector {
+fn vector_in(input: &CStr, _oid: Oid, typmod: i32) -> VectorOutput {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum State {
         MatchingLeft,
@@ -364,7 +354,8 @@ fn vector_in(input: &CStr, _oid: Oid, _typmod: i32) -> PgVector {
     }
     use State::*;
     let input = input.to_bytes();
-    let mut vector = Vec::<Scalar>::new();
+    let typmod = VectorTypmod::parse_from_i32(typmod).unwrap();
+    let mut vector = Vec::<Scalar>::with_capacity(typmod.dimensions().unwrap_or(0) as usize);
     let mut state = MatchingLeft;
     let mut token: Option<String> = None;
     for &c in input {
@@ -393,11 +384,16 @@ fn vector_in(input: &CStr, _oid: Oid, _typmod: i32) -> PgVector {
     if state != MatchedRight {
         panic!("Bad sequence.");
     }
+    if let Some(dims) = typmod.dimensions() {
+        if dims as usize != vector.len() {
+            panic!("The dimensions are unmatched with the type modifier.");
+        }
+    }
     Vector::new_in_postgres(&vector)
 }
 
 #[pgrx::pg_extern(immutable, parallel_safe, strict)]
-fn vector_out(vector: &Vector) -> CString {
+fn vector_out(vector: VectorInput<'_>) -> CString {
     let mut buffer = String::new();
     buffer.push_str("[");
     if let Some(&x) = vector.data().get(0) {
@@ -416,17 +412,26 @@ fn vector_typmod_in(list: Array<&CStr>) -> i32 {
         return -1;
     } else if list.len() == 1 {
         let s = list.get(0).unwrap().unwrap().to_str().unwrap();
-        let typmod = VectorTypmod::parse_from_str(s).unwrap();
+        let typmod = VectorTypmod::parse_from_str(s).expect("Invaild typmod.");
         typmod.into_i32()
     } else {
-        panic!("Invaild typmod");
+        panic!("Invaild typmod.");
+    }
+}
+
+#[pgrx::pg_extern(immutable, parallel_safe, strict)]
+fn vector_typmod_out(typmod: i32) -> CString {
+    let typmod = VectorTypmod::parse_from_i32(typmod).unwrap();
+    match typmod.into_option_string() {
+        Some(s) => CString::new(format!("({})", s)).unwrap(),
+        None => CString::new("()").unwrap(),
     }
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
 #[pgrx::opname(+)]
 #[pgrx::commutator(+)]
-fn operator_add(lhs: &Vector, rhs: &Vector) -> PgVector {
+fn operator_add(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> VectorOutput {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
     let n = lhs.len();
     let mut v = Vector::new_zeroed(n);
@@ -438,7 +443,7 @@ fn operator_add(lhs: &Vector, rhs: &Vector) -> PgVector {
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
 #[pgrx::opname(-)]
-fn operator_minus(lhs: &Vector, rhs: &Vector) -> PgVector {
+fn operator_minus(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> VectorOutput {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
     let n = lhs.len();
     let mut v = Vector::new_zeroed(n);
@@ -454,9 +459,9 @@ fn operator_minus(lhs: &Vector, rhs: &Vector) -> PgVector {
 #[pgrx::commutator(>)]
 #[pgrx::restrict(scalarltsel)]
 #[pgrx::join(scalarltjoinsel)]
-fn operator_lt(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_lt(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs < rhs
+    lhs.deref() < rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
@@ -465,9 +470,9 @@ fn operator_lt(lhs: &Vector, rhs: &Vector) -> bool {
 #[pgrx::commutator(>=)]
 #[pgrx::restrict(scalarltsel)]
 #[pgrx::join(scalarltjoinsel)]
-fn operator_lte(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_lte(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs <= rhs
+    lhs.deref() <= rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
@@ -476,9 +481,9 @@ fn operator_lte(lhs: &Vector, rhs: &Vector) -> bool {
 #[pgrx::commutator(<)]
 #[pgrx::restrict(scalargtsel)]
 #[pgrx::join(scalargtjoinsel)]
-fn operator_gt(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_gt(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs > rhs
+    lhs.deref() > rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
@@ -487,9 +492,9 @@ fn operator_gt(lhs: &Vector, rhs: &Vector) -> bool {
 #[pgrx::commutator(<=)]
 #[pgrx::restrict(scalargtsel)]
 #[pgrx::join(scalargtjoinsel)]
-fn operator_gte(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_gte(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs >= rhs
+    lhs.deref() >= rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
@@ -498,9 +503,9 @@ fn operator_gte(lhs: &Vector, rhs: &Vector) -> bool {
 #[pgrx::commutator(=)]
 #[pgrx::restrict(eqsel)]
 #[pgrx::join(eqjoinsel)]
-fn operator_eq(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_eq(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs == rhs
+    lhs.deref() == rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
@@ -509,59 +514,31 @@ fn operator_eq(lhs: &Vector, rhs: &Vector) -> bool {
 #[pgrx::commutator(<>)]
 #[pgrx::restrict(eqsel)]
 #[pgrx::join(eqjoinsel)]
-fn operator_neq(lhs: &Vector, rhs: &Vector) -> bool {
+fn operator_neq(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> bool {
     assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
-    lhs != rhs
+    lhs.deref() != rhs.deref()
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
 #[pgrx::opname(<=>)]
 #[pgrx::commutator(<=>)]
-fn operator_cosine(lhs: &Vector, rhs: &Vector) -> Scalar {
-    if lhs.len() != rhs.len() {
-        return Scalar::NAN;
-    }
-    let n = lhs.len();
-    if n == 0 {
-        return Scalar::NAN;
-    }
-    let mut alpha = 0.0 as Scalar;
-    let mut beta = 0.0 as Scalar;
-    let mut gamma = 0.0 as Scalar;
-    for i in 0..n {
-        alpha += lhs[i] * rhs[i];
-        beta += lhs[i] * lhs[i];
-        gamma += rhs[i] * rhs[i];
-    }
-    alpha / (beta * gamma).sqrt()
+fn operator_cosine(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> Scalar {
+    assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
+    Distance::Cosine.distance(&lhs, &rhs)
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
 #[pgrx::opname(<#>)]
 #[pgrx::commutator(<#>)]
-fn operator_inner_product(lhs: &Vector, rhs: &Vector) -> Scalar {
-    if lhs.len() != rhs.len() {
-        return Scalar::NAN;
-    }
-    let n = lhs.len();
-    let mut alpha = 0.0 as Scalar;
-    for i in 0..n {
-        alpha += lhs[i] * rhs[i];
-    }
-    alpha
+fn operator_dot(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> Scalar {
+    assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
+    Distance::Dot.distance(&lhs, &rhs)
 }
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]
 #[pgrx::opname(<->)]
 #[pgrx::commutator(<->)]
-fn operator_l2_distance(lhs: &Vector, rhs: &Vector) -> Scalar {
-    if lhs.len() != rhs.len() {
-        return Scalar::NAN;
-    }
-    let n = lhs.len();
-    let mut alpha = 0.0 as Scalar;
-    for i in 0..n {
-        alpha += (lhs[i] - rhs[i]) * (lhs[i] - rhs[i]);
-    }
-    alpha
+fn operator_l2(lhs: VectorInput<'_>, rhs: VectorInput<'_>) -> Scalar {
+    assert_eq!(lhs.len(), rhs.len(), "Invaild operation.");
+    Distance::L2.distance(&lhs, &rhs)
 }

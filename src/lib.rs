@@ -1,23 +1,25 @@
 //! Postgres vector extension.
 //!
 //! Provides an easy-to-use extension for vector similarity search.
-#![feature(core_intrinsics)]
 #![feature(allocator_api)]
-#![feature(arbitrary_self_types)]
-#![feature(panic_update_hook)]
-#![feature(ptr_metadata)]
-#![feature(lazy_cell)]
 #![feature(try_blocks)]
-#![feature(panic_info_message)]
+#![feature(async_fn_in_trait)]
+#![feature(auto_traits)]
+#![feature(negative_impls)]
+#![feature(ptr_metadata)]
+#![feature(vec_into_raw_parts)]
+#![feature(thread_local)]
+#![feature(unsize)]
+#![feature(is_sorted)]
 
 use pgrx::prelude::*;
 
+mod algorithms;
 mod bgworker;
-mod bridge;
 mod embedding;
-mod gucs;
-mod operator;
+mod memory;
 mod postgres;
+mod prelude;
 mod udf;
 
 pgrx::pg_module_magic!();
@@ -38,7 +40,7 @@ pub unsafe extern "C" fn _PG_init() {
         .enable_spi_access()
         .enable_shmem_access(None)
         .load();
-    gucs::init();
+    self::postgres::init();
 }
 
 /// This module is required by `cargo pgrx test` invocations.

@@ -1,11 +1,11 @@
-use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 use crc32fast::hash as crc32;
-use std::fs::{File, OpenOptions};
-use std::io::Error;
-use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Write;
 use std::path::Path;
+use tokio::fs::File;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::Error;
+use tokio::io::ErrorKind;
 
 /*
 +----------+-----------+---------+
@@ -28,21 +28,21 @@ pub struct Wal {
 }
 
 impl Wal {
-    pub fn open(path: impl AsRef<Path>) -> Self {
+    pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         use WalStatus::*;
         let file = OpenOptions::new()
             .create(true)
             .write(true)
             .read(true)
             .open(path)
-            .unwrap();
-        Self {
+            .await?;
+        Ok(Self {
             file,
             offset: 0,
             status: Read,
-        }
+        })
     }
-    pub fn create(path: impl AsRef<Path>) -> Self {
+    pub async fn create(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         use WalStatus::*;
         let file = OpenOptions::new()
             .create(true)
@@ -50,21 +50,21 @@ impl Wal {
             .read(true)
             .truncate(true)
             .open(path)
-            .unwrap();
-        Self {
+            .await?;
+        Ok(Self {
             file,
             offset: 0,
             status: Write,
-        }
+        })
     }
-    pub fn read(&mut self) -> Option<Vec<u8>> {
+    pub async fn read(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
         use WalStatus::*;
         let Read = self.status else { panic!("Operation not permitted.") };
-        let maybe_error: Result<Vec<u8>, Error> = try {
-            let crc = self.file.read_u32::<LE>()?;
-            let len = self.file.read_u16::<LE>()?;
+        let maybe_error: tokio::io::Result<Vec<u8>> = try {
+            let crc = self.file.read_u32().await?;
+            let len = self.file.read_u16().await?;
             let mut data = vec![0u8; len as usize];
-            self.file.read_exact(&mut data)?;
+            self.file.read_exact(&mut data).await?;
             if crc32(&data) == crc {
                 self.offset += 4 + 2 + data.len();
                 data
@@ -74,43 +74,102 @@ impl Wal {
             }
         };
         match maybe_error {
-            Ok(data) => Some(data),
+            Ok(data) => Ok(Some(data)),
             Err(error) if error.kind() == ErrorKind::UnexpectedEof => {
                 self.status = WalStatus::Truncate;
-                None
+                Ok(None)
             }
-            Err(error) => panic!("IO Error: {}", error),
+            Err(error) => anyhow::bail!(error),
         }
     }
-    pub fn truncate(&mut self) {
+    pub async fn truncate(&mut self) -> anyhow::Result<()> {
         use WalStatus::*;
         let Truncate = self.status else { panic!("Operation not permitted.") };
-        self.file.set_len(self.offset as _).unwrap();
-        self.file.flush().unwrap();
+        self.file.set_len(self.offset as _).await?;
+        self.file.sync_all().await?;
         self.status = WalStatus::Flush;
+        Ok(())
     }
-    pub fn write(&mut self, bytes: &[u8]) {
+    pub async fn write(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
         use WalStatus::*;
         let (Write | Flush) = self.status else { panic!("Operation not permitted.") };
-        self.file.write_u32::<LE>(crc32(bytes)).unwrap();
-        self.file.write_u16::<LE>(bytes.len() as _).unwrap();
-        self.file.write_all(&bytes).unwrap();
+        self.file.write_u32(crc32(bytes)).await?;
+        self.file.write_u16(bytes.len() as _).await?;
+        self.file.write_all(&bytes).await?;
         self.offset += 4 + 2 + bytes.len();
         self.status = WalStatus::Write;
+        Ok(())
     }
-    pub fn flush(&mut self) {
+    pub async fn flush(&mut self) -> anyhow::Result<()> {
         use WalStatus::*;
         let (Write | Flush) = self.status else { panic!("Operation not permitted.") };
-        self.file.sync_all().unwrap();
+        self.file.sync_all().await?;
         self.status = WalStatus::Flush;
+        Ok(())
     }
 }
 
-impl Drop for Wal {
-    fn drop(&mut self) {
+enum WalWriterMessage {
+    Write(Vec<u8>),
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+pub struct WalWriter {
+    tx: Option<tokio::sync::mpsc::Sender<WalWriterMessage>>,
+    handle: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+impl WalWriter {
+    pub fn spawn(mut wal: Wal) -> anyhow::Result<Self> {
         use WalStatus::*;
-        if let Write | Flush = self.status {
-            self.file.sync_all().unwrap();
-        }
+        anyhow::ensure!(matches!(wal.status, Write | Flush));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4096);
+        let handle = tokio::task::spawn(async move {
+            while let Some(r) = rx.recv().await {
+                use WalWriterMessage::*;
+                match r {
+                    Write(bytes) => {
+                        wal.write(&bytes).await?;
+                    }
+                    Flush(callback) => {
+                        let _ = callback.send(());
+                    }
+                }
+            }
+            Ok(())
+        });
+        Ok(Self {
+            tx: Some(tx),
+            handle,
+        })
+    }
+    pub async fn write(&self, bytes: Vec<u8>) -> anyhow::Result<()> {
+        use WalWriterMessage::*;
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(Write(bytes))
+            .await
+            .ok()
+            .ok_or(anyhow::anyhow!("The WAL thread exited."))?;
+        Ok(())
+    }
+    pub async fn flush(&self) -> anyhow::Result<()> {
+        use WalWriterMessage::*;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(Flush(tx))
+            .await
+            .ok()
+            .ok_or(anyhow::anyhow!("The WAL thread exited."))?;
+        rx.await?;
+        Ok(())
+    }
+    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+        self.tx.take();
+        self.handle.await??;
+        Ok(())
     }
 }

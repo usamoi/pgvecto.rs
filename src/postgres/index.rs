@@ -2,47 +2,30 @@ use crate::postgres::datatype::VectorInput;
 use crate::postgres::datatype::VectorTypmod;
 use crate::postgres::gucs::SEARCH_K;
 use crate::postgres::hooks::client;
-use crate::prelude::Distance;
-use crate::prelude::Id;
-use crate::prelude::Options;
-use crate::prelude::Pointer;
-use crate::prelude::Scalar;
+use crate::prelude::*;
 use pg_sys::Datum;
 use pgrx::pg_sys::AsPgCStr;
 use pgrx::prelude::*;
 use std::ffi::CStr;
 use std::ptr::null_mut;
 
-struct ScanState {
-    data: Vec<Pointer>,
-}
-
-#[derive(Copy, Clone, Debug)]
-#[repr(C)]
-struct IndexOptions {
-    #[allow(dead_code)]
-    vl_len_: i32,
-
-    algorithm_offset: i32,
-    options_algorithm_offset: i32,
-}
-
-impl IndexOptions {
-    unsafe fn get_str(this: *const Self, offset: i32, default: &str) -> &str {
-        if offset == 0 {
-            default
-        } else {
-            let ptr = (this as *const std::os::raw::c_char).offset(offset as isize);
-            CStr::from_ptr(ptr).to_str().unwrap()
-        }
-    }
+pub unsafe fn init() {
+    RELOPT_KIND = pg_sys::add_reloption_kind();
+    pg_sys::add_string_reloption(
+        RELOPT_KIND,
+        "options".as_pg_cstr(),
+        "Index options.".as_pg_cstr(),
+        "{}".as_pg_cstr(),
+        None,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
 }
 
 #[pgrx::pg_extern(sql = "
     CREATE OR REPLACE FUNCTION pgvectors_amhandler(internal) RETURNS index_am_handler
     PARALLEL SAFE IMMUTABLE STRICT LANGUAGE c AS 'MODULE_PATHNAME', '@FUNCTION_NAME@';
     CREATE ACCESS METHOD pgvectors TYPE INDEX HANDLER pgvectors_amhandler;
-    COMMENT ON ACCESS METHOD pgvectors IS 'HNSW index access method';
+    COMMENT ON ACCESS METHOD pgvectors IS 'pgvecto.rs index access method';
 ", requires = ["vector"])]
 fn pgvectors_amhandler(
     _fcinfo: pg_sys::FunctionCallInfo,
@@ -93,55 +76,55 @@ fn pgvectors_amhandler(
 
 static mut RELOPT_KIND: pg_sys::relopt_kind = 0;
 
-pub unsafe fn init() {
-    RELOPT_KIND = pg_sys::add_reloption_kind();
-    pg_sys::add_string_reloption(
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct IndexOption {
+    capacity: usize,
+    size_ram: usize,
+    size_disk: usize,
+    backend_vectors: Backend,
+    algorithm: AlgorithmOptions,
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(C)]
+struct RawOptions {
+    vl_len_: i32,
+    offset: i32,
+}
+
+impl RawOptions {
+    unsafe fn get(this: *const Self) -> IndexOption {
+        if (*this).offset == 0 {
+            panic!("Options must be set.")
+        } else {
+            let ptr = (this as *const std::os::raw::c_char).offset((*this).offset as isize);
+            serde_json::from_slice::<IndexOption>(CStr::from_ptr(ptr).to_bytes()).unwrap()
+        }
+    }
+}
+
+#[pg_guard]
+unsafe extern "C" fn amoptions(reloptions: pg_sys::Datum, validate: bool) -> *mut pg_sys::bytea {
+    let tab: &[pg_sys::relopt_parse_elt] = &[pg_sys::relopt_parse_elt {
+        optname: "options".as_pg_cstr(),
+        opttype: pg_sys::relopt_type_RELOPT_TYPE_STRING,
+        offset: memoffset::offset_of!(RawOptions, offset) as i32,
+    }];
+    let rdopts = pg_sys::build_reloptions(
+        reloptions,
+        validate,
         RELOPT_KIND,
-        "algorithm".as_pg_cstr(),
-        "The algorithm.".as_pg_cstr(),
-        "UNDEFINED".as_pg_cstr(),
-        None,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+        std::mem::size_of::<RawOptions>(),
+        tab.as_ptr(),
+        tab.len() as _,
     );
-    pg_sys::add_string_reloption(
-        RELOPT_KIND,
-        "options_algorithm".as_pg_cstr(),
-        "Options for the algorithm.".as_pg_cstr(),
-        "{}".as_pg_cstr(),
-        None,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
+    rdopts as *mut pg_sys::bytea
 }
 
 #[pg_guard]
 unsafe extern "C" fn amvalidate(opclass_oid: pg_sys::Oid) -> bool {
     validate_opclass(opclass_oid);
     true
-}
-
-#[pg_guard]
-unsafe extern "C" fn amoptions(reloptions: pg_sys::Datum, validate: bool) -> *mut pg_sys::bytea {
-    let tab: &[pg_sys::relopt_parse_elt] = &[
-        pg_sys::relopt_parse_elt {
-            optname: "algorithm".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_STRING,
-            offset: memoffset::offset_of!(IndexOptions, algorithm_offset) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "options_algorithm".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_STRING,
-            offset: memoffset::offset_of!(IndexOptions, options_algorithm_offset) as i32,
-        },
-    ];
-    let rdopts = pg_sys::build_reloptions(
-        reloptions,
-        validate,
-        RELOPT_KIND,
-        std::mem::size_of::<IndexOptions>(),
-        tab.as_ptr(),
-        tab.len() as _,
-    );
-    rdopts as *mut pg_sys::bytea
 }
 
 #[pg_guard]
@@ -180,14 +163,14 @@ unsafe extern "C" fn ambuild(
     let id = Id::from_sys(oid);
     crate::postgres::hooks::hook_on_writing(id);
     let options = options(index_relation);
-    let (tx, rx) = async_channel::bounded::<(Vec<Scalar>, Pointer)>(65536);
+    let (tx, rx) = async_channel::bounded::<(Box<[Scalar]>, Pointer)>(65536);
     let thread = std::thread::spawn({
         move || {
             client().build(id, options, rx).unwrap();
         }
     });
     struct BuildState {
-        tx: async_channel::Sender<(Vec<Scalar>, Pointer)>,
+        tx: async_channel::Sender<(Box<[Scalar]>, Pointer)>,
     }
     let mut state = BuildState { tx };
     #[pgrx::pg_guard]
@@ -202,7 +185,10 @@ unsafe extern "C" fn ambuild(
         let pgvector = VectorInput::from_datum(*values.add(0), *is_null.add(0)).unwrap();
         (&mut *(state as *mut BuildState))
             .tx
-            .send_blocking((pgvector.to_vec(), Pointer::from_sys(*ctid)))
+            .send_blocking((
+                pgvector.to_vec().into_boxed_slice(),
+                Pointer::from_sys(*ctid),
+            ))
             .unwrap();
     }
     let index_info = pgrx::pg_sys::BuildIndexInfo(index_relation);
@@ -235,7 +221,7 @@ unsafe extern "C" fn ambuildempty(index_relation: pg_sys::Relation) {
     let id = Id::from_sys(oid);
     crate::postgres::hooks::hook_on_writing(id);
     let options = options(index_relation);
-    let (_, rx) = async_channel::bounded::<(Vec<Scalar>, Pointer)>(1);
+    let (_, rx) = async_channel::bounded::<(Box<[Scalar]>, Pointer)>(1);
     client().build(id, options, rx).unwrap();
 }
 
@@ -256,8 +242,14 @@ unsafe extern "C" fn aminsert(
     let pgvector = VectorInput::from_datum(*values.add(0), *is_null.add(0)).unwrap();
     let vector = pgvector.data();
     let p = Pointer::from_sys(*heap_tid);
-    client().insert(id, (vector.to_vec(), p)).unwrap();
+    client()
+        .insert(id, (vector.to_vec().into_boxed_slice(), p))
+        .unwrap();
     true
+}
+
+struct ScanState {
+    data: Vec<Pointer>,
 }
 
 #[pg_guard]
@@ -316,7 +308,9 @@ unsafe extern "C" fn amrescan(
     *state = Some(ScanState {
         data: {
             let k = SEARCH_K.get() as _;
-            let mut data = client().search(id, (vector.to_vec(), k)).unwrap();
+            let mut data = client()
+                .search(id, (vector.to_vec().into_boxed_slice(), k))
+                .unwrap();
             data.reverse();
             data
         },
@@ -399,18 +393,19 @@ unsafe fn options(index_relation: pg_sys::Relation) -> Options {
     )
     .unwrap();
     let dims = typmod
-        .dimensions()
+        .dims()
         .expect("Column does not have dimensions.");
-    let options = (*index_relation).rd_options as *mut IndexOptions;
+    let options = (*index_relation).rd_options as *mut RawOptions;
     assert!(!options.is_null(), "Options must be set.");
-    let algorithm = IndexOptions::get_str(options, (*options).algorithm_offset, "UNDEFINED");
-    let options_algorithm =
-        IndexOptions::get_str(options, (*options).options_algorithm_offset, "{}");
+    let index_options = RawOptions::get(options);
     Options {
         dims,
         distance,
-        algorithm: algorithm.to_string(),
-        options_algorithm: options_algorithm.to_string(),
+        capacity: index_options.capacity,
+        size_disk: index_options.size_disk,
+        size_ram: index_options.size_ram,
+        backend_vectors: index_options.backend_vectors,
+        algorithm: index_options.algorithm,
     }
 }
 

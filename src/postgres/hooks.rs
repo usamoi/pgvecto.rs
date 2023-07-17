@@ -1,6 +1,7 @@
 use crate::bgworker::Client;
 use crate::postgres::gucs::BGWORKER_PORT;
 use crate::prelude::*;
+use parking_lot::Mutex;
 use pgrx::PgHooks;
 use std::collections::BTreeSet;
 
@@ -169,6 +170,24 @@ pub unsafe fn hook_on_aborting() {
     STATE.take();
 }
 
+static MESSAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 pub unsafe fn init() {
     pgrx::register_hook(&mut HOOKS);
+    std::panic::set_hook(Box::new(|info| {
+        let mut messages = MESSAGES.lock();
+        messages.push(format!("Process panickied. {:?}", info));
+        messages.push(format!(
+            "Backtrace: {}",
+            std::backtrace::Backtrace::force_capture()
+        ));
+    }));
+}
+
+#[pgrx::pg_extern]
+fn pgvectors_print() {
+    let mut messages = MESSAGES.lock();
+    for message in messages.drain(..) {
+        pgrx::warning!("{}", message);
+    }
 }

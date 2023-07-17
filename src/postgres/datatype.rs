@@ -11,6 +11,7 @@ use pgrx::Array;
 use pgrx::FromDatum;
 use pgrx::IntoDatum;
 use std::alloc::Allocator;
+use std::alloc::Global;
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::ffi::CStr;
@@ -24,14 +25,14 @@ use std::ptr::NonNull;
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum VectorTypmod {
     Any,
-    Dimensions(u16),
+    Dims(u16),
 }
 
 impl VectorTypmod {
     pub fn parse_from_str(s: &str) -> Option<Self> {
         use VectorTypmod::*;
         if let Ok(x) = s.parse::<u16>() {
-            Some(Dimensions(x as u16))
+            Some(Dims(x as u16))
         } else {
             None
         }
@@ -41,7 +42,7 @@ impl VectorTypmod {
         if x == -1 {
             Some(Any)
         } else if u16::MIN as i32 <= x && x <= u16::MAX as i32 {
-            Some(Dimensions(x as u16))
+            Some(Dims(x as u16))
         } else {
             None
         }
@@ -50,21 +51,21 @@ impl VectorTypmod {
         use VectorTypmod::*;
         match self {
             Any => None,
-            Dimensions(x) => Some(i32::from(x).to_string()),
+            Dims(x) => Some(i32::from(x).to_string()),
         }
     }
     pub fn into_i32(self) -> i32 {
         use VectorTypmod::*;
         match self {
             Any => -1,
-            Dimensions(x) => i32::from(x),
+            Dims(x) => i32::from(x),
         }
     }
-    pub fn dimensions(self) -> Option<u16> {
+    pub fn dims(self) -> Option<u16> {
         use VectorTypmod::*;
         match self {
             Any => None,
-            Dimensions(dims) => Some(dims),
+            Dims(dims) => Some(dims),
         }
     }
 }
@@ -99,8 +100,8 @@ impl Vector {
     }
     fn layout(len: usize) -> Layout {
         u16::try_from(len).ok().expect("Vector is too large.");
-        let layout_alpha = std::alloc::Layout::new::<Vector>();
-        let layout_beta = std::alloc::Layout::array::<Scalar>(len).unwrap();
+        let layout_alpha = Layout::new::<Vector>();
+        let layout_beta = Layout::array::<Scalar>(len).unwrap();
         let layout = layout_alpha.extend(layout_beta).unwrap().0;
         layout.pad_to_align()
     }
@@ -108,7 +109,7 @@ impl Vector {
         unsafe {
             assert!(u16::try_from(slice.len()).is_ok());
             let layout = Vector::layout(slice.len());
-            let ptr = std::alloc::Global.allocate(layout).unwrap().as_ptr() as *mut Vector;
+            let ptr = Global.allocate(layout).unwrap().as_ptr() as *mut Vector;
             std::ptr::addr_of_mut!((*ptr).varlena).write(Vector::varlena(layout.size()));
             std::ptr::addr_of_mut!((*ptr).len).write(slice.len() as u16);
             std::ptr::copy_nonoverlapping(slice.as_ptr(), (*ptr).phantom.as_mut_ptr(), slice.len());
@@ -355,7 +356,7 @@ fn vector_in(input: &CStr, _oid: Oid, typmod: i32) -> VectorOutput {
     use State::*;
     let input = input.to_bytes();
     let typmod = VectorTypmod::parse_from_i32(typmod).unwrap();
-    let mut vector = Vec::<Scalar>::with_capacity(typmod.dimensions().unwrap_or(0) as usize);
+    let mut vector = Vec::<Scalar>::with_capacity(typmod.dims().unwrap_or(0) as usize);
     let mut state = MatchingLeft;
     let mut token: Option<String> = None;
     for &c in input {
@@ -384,7 +385,7 @@ fn vector_in(input: &CStr, _oid: Oid, typmod: i32) -> VectorOutput {
     if state != MatchedRight {
         panic!("Bad sequence.");
     }
-    if let Some(dims) = typmod.dimensions() {
+    if let Some(dims) = typmod.dims() {
         if dims as usize != vector.len() {
             panic!("The dimensions are unmatched with the type modifier.");
         }

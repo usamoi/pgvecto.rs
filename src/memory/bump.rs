@@ -1,40 +1,42 @@
-use super::BlockLayout;
 use std::alloc::{AllocError, Layout};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Bump {
-    layout: BlockLayout,
-    bump0: *mut Bump0,
+    size: usize,
+    space: *mut Space,
 }
 
 impl Bump {
-    pub unsafe fn new(layout: BlockLayout, addr: *mut u8, create: bool) -> Self {
-        assert!(layout.size >= 4096 && layout.align >= 8 && layout.align <= 4096);
-        let bump0 = addr.cast::<Bump0>();
-        if create {
-            bump0.write(Bump0 {
-                objects: AtomicUsize::new(0),
-                cursor: AtomicUsize::new(4096),
-            });
-        }
-        Self { layout, bump0 }
+    pub unsafe fn build(size: usize, addr: *mut u8) -> Self {
+        assert!(size >= 4096);
+        let space = addr.cast::<Space>();
+        space.write(Space {
+            cursor: AtomicUsize::new(4096),
+            objects: AtomicUsize::new(0),
+        });
+        Self { size, space }
+    }
+    pub unsafe fn load(size: usize, addr: *mut u8) -> Self {
+        assert!(size >= 4096);
+        let space = addr.cast::<Space>();
+        Self { size, space }
     }
     pub fn allocate(&self, layout: Layout) -> Result<usize, AllocError> {
         if layout.size() == 0 {
             return Ok(0);
         }
-        if self.layout.align < layout.align() {
+        if layout.align() > 128 {
             return Err(AllocError);
         }
-        let mut old = unsafe { (*self.bump0).cursor.load(Ordering::Relaxed) };
+        let mut old = unsafe { (*self.space).cursor.load(Ordering::Relaxed) };
         let offset = loop {
             let offset = (old + layout.align() - 1) & !(layout.align() - 1);
             let new = offset + layout.size();
-            if new > self.layout.size {
+            if new > self.size {
                 return Err(AllocError);
             }
             let exchange = unsafe {
-                (*self.bump0).cursor.compare_exchange_weak(
+                (*self.space).cursor.compare_exchange_weak(
                     old,
                     new,
                     Ordering::Relaxed,
@@ -45,24 +47,28 @@ impl Bump {
             old = _old;
         };
         unsafe {
-            (*self.bump0).objects.fetch_add(1, Ordering::Relaxed);
+            (*self.space).objects.fetch_add(1, Ordering::Relaxed);
         }
         Ok(offset)
+    }
+    pub fn allocate_zeroed(&self, layout: Layout) -> Result<usize, AllocError> {
+        self.allocate(layout)
     }
     pub unsafe fn deallocate(&self, _offset: usize, layout: Layout) {
         if layout.size() == 0 {
             return;
         }
         unsafe {
-            (*self.bump0).objects.fetch_sub(1, Ordering::Relaxed);
+            (*self.space).objects.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
 
-#[repr(C, align(4096))]
-pub struct Bump0 {
-    pub objects: AtomicUsize,
-    pub cursor: AtomicUsize,
-}
+unsafe impl Send for Bump {}
+unsafe impl Sync for Bump {}
 
-static_assertions::assert_eq_size!(Bump0, [u8; 4096]);
+#[repr(C)]
+struct Space {
+    cursor: AtomicUsize,
+    objects: AtomicUsize,
+}

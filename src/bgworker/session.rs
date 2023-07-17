@@ -1,6 +1,6 @@
 use super::find_index;
 use super::index::Index;
-use crate::prelude::{BincodeDeserialize, BincodeSerialize, Error, Options};
+use crate::prelude::{BincodeDeserialize, BincodeSerialize, Options};
 use crate::prelude::{Id, Pointer, Scalar};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -10,9 +10,7 @@ pub enum ClientPacket {
         id: Id,
         options: Options,
     },
-    Build1 {
-        data: (Vec<Scalar>, Pointer),
-    },
+    Build1((Box<[Scalar]>, Pointer)),
     Build2,
     Load {
         id: Id,
@@ -22,7 +20,7 @@ pub enum ClientPacket {
     },
     Insert {
         id: Id,
-        insert: (Vec<Scalar>, Pointer),
+        insert: (Box<[Scalar]>, Pointer),
     },
     Delete {
         id: Id,
@@ -30,7 +28,7 @@ pub enum ClientPacket {
     },
     Search {
         id: Id,
-        search: (Vec<Scalar>, usize),
+        search: (Box<[Scalar]>, usize),
     },
     Flush {
         id: Id,
@@ -42,7 +40,7 @@ pub enum ClientPacket {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ServerPacket {
-    Reset(Error),
+    Reset(String),
     // responses
     Build {},
     Load {},
@@ -71,17 +69,13 @@ impl Server {
         let packet_size = self.read.read_u16().await?;
         let mut buffer = vec![0u8; packet_size as usize];
         self.read.read_exact(&mut buffer).await?;
-        let packet = buffer.deserialize()?;
-        Ok(packet)
+        Ok(buffer.deserialize()?)
     }
     async fn send(&mut self, maybe: anyhow::Result<ServerPacket>) -> anyhow::Result<()> {
         use tokio::io::AsyncWriteExt;
         let packet = match maybe {
             Ok(packet) => packet,
-            Err(e) => match e.downcast::<Error>() {
-                Ok(e) => ServerPacket::Reset(e),
-                Err(e) => anyhow::bail!(e),
-            },
+            Err(e) => ServerPacket::Reset(e.to_string()),
         };
         let packet = packet.serialize()?;
         anyhow::ensure!(packet.len() <= u16::MAX as usize);
@@ -109,7 +103,7 @@ pub async fn server_main(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                         loop {
                             let packet = server.recv().await?;
                             match packet {
-                                ClientPacket::Build1 { data } => {
+                                ClientPacket::Build1(data) => {
                                     tx.send(data).await?;
                                 }
                                 ClientPacket::Build2 => {
@@ -128,58 +122,65 @@ pub async fn server_main(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
                 server.flush().await?;
             }
             ClientPacket::Load { id } => {
-                let maybe = try {
+                let maybe = async {
                     handler_load(id).await?;
-                    ServerPacket::Load {}
-                };
+                    Ok(ServerPacket::Load {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Unload { id } => {
-                let maybe = try {
+                let maybe = async {
                     handler_unload(id).await?;
-                    ServerPacket::Unload {}
-                };
+                    Ok(ServerPacket::Unload {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Insert { id, insert } => {
-                let maybe = try {
+                let maybe = async {
                     handler_insert(id, insert).await?;
-                    ServerPacket::Insert {}
-                };
+                    Ok(ServerPacket::Insert {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Delete { id, delete } => {
-                let maybe = try {
+                let maybe = async {
                     handler_delete(id, delete).await?;
-                    ServerPacket::Delete {}
-                };
+                    Ok(ServerPacket::Delete {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Search { id, search } => {
-                let maybe = try {
+                let maybe = async {
                     let data = handler_search(id, search).await?;
-                    ServerPacket::Search { result: data }
-                };
+                    Ok(ServerPacket::Search { result: data })
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Flush { id } => {
-                let maybe = try {
+                let maybe = async {
                     handler_flush(id).await?;
-                    ServerPacket::Flush {}
-                };
+                    Ok(ServerPacket::Flush {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
             ClientPacket::Drop { id } => {
-                let maybe = try {
+                let maybe = async {
                     handler_drop(id).await?;
-                    ServerPacket::Drop {}
-                };
+                    Ok(ServerPacket::Drop {})
+                }
+                .await;
                 server.send(maybe).await?;
                 server.flush().await?;
             }
@@ -191,7 +192,7 @@ pub async fn server_main(stream: tokio::net::TcpStream) -> anyhow::Result<()> {
 async fn handler_build(
     id: Id,
     options: Options,
-    data: async_channel::Receiver<(Vec<Scalar>, Pointer)>,
+    data: async_channel::Receiver<(Box<[Scalar]>, Pointer)>,
 ) -> anyhow::Result<()> {
     let index = find_index(id).await?;
     let mut guard = index.write().await;
@@ -219,7 +220,7 @@ async fn handler_unload(id: Id) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handler_insert(id: Id, insert: (Vec<Scalar>, Pointer)) -> anyhow::Result<()> {
+async fn handler_insert(id: Id, insert: (Box<[Scalar]>, Pointer)) -> anyhow::Result<()> {
     let index = find_index(id).await?;
     let index = index.read().await;
     let index = index.get()?;
@@ -235,7 +236,7 @@ async fn handler_delete(id: Id, delete: Pointer) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handler_search(id: Id, search: (Vec<Scalar>, usize)) -> anyhow::Result<Vec<Pointer>> {
+async fn handler_search(id: Id, search: (Box<[Scalar]>, usize)) -> anyhow::Result<Vec<Pointer>> {
     let index = find_index(id).await?;
     let index = index.read().await;
     let index = index.get()?;
@@ -323,13 +324,13 @@ impl Client {
         &mut self,
         id: Id,
         options: Options,
-        data: async_channel::Receiver<(Vec<Scalar>, Pointer)>,
+        data: async_channel::Receiver<(Box<[Scalar]>, Pointer)>,
     ) -> anyhow::Result<()> {
         let inner = &mut self.inner;
         self.runtime.block_on(async move {
             ClientInner::send(&mut inner.write, ClientPacket::Build0 { id, options }).await?;
             while let Ok(data) = data.recv().await {
-                ClientInner::send(&mut inner.write, ClientPacket::Build1 { data }).await?;
+                ClientInner::send(&mut inner.write, ClientPacket::Build1(data)).await?;
             }
             ClientInner::send(&mut inner.write, ClientPacket::Build2).await?;
             ClientInner::flush(&mut inner.write).await?;
@@ -341,7 +342,7 @@ impl Client {
             }
         })
     }
-    pub fn insert(&mut self, id: Id, insert: (Vec<Scalar>, Pointer)) -> anyhow::Result<()> {
+    pub fn insert(&mut self, id: Id, insert: (Box<[Scalar]>, Pointer)) -> anyhow::Result<()> {
         let inner = &mut self.inner;
         self.runtime.block_on(async move {
             ClientInner::send(&mut inner.write, ClientPacket::Insert { id, insert }).await?;
@@ -367,7 +368,11 @@ impl Client {
             }
         })
     }
-    pub fn search(&mut self, id: Id, search: (Vec<Scalar>, usize)) -> anyhow::Result<Vec<Pointer>> {
+    pub fn search(
+        &mut self,
+        id: Id,
+        search: (Box<[Scalar]>, usize),
+    ) -> anyhow::Result<Vec<Pointer>> {
         let inner = &mut self.inner;
         self.runtime.block_on(async move {
             ClientInner::send(&mut inner.write, ClientPacket::Search { id, search }).await?;

@@ -1,16 +1,18 @@
 //! Postgres vector extension.
 //!
 //! Provides an easy-to-use extension for vector similarity search.
+#![feature(core_intrinsics)]
 #![feature(allocator_api)]
-#![feature(try_blocks)]
 #![feature(async_fn_in_trait)]
+#![feature(thread_local)]
 #![feature(auto_traits)]
 #![feature(negative_impls)]
 #![feature(ptr_metadata)]
-#![feature(vec_into_raw_parts)]
-#![feature(thread_local)]
 #![feature(unsize)]
-#![feature(is_sorted)]
+#![feature(try_blocks)]
+#![feature(binary_heap_into_iter_sorted)]
+#![feature(new_uninit)]
+#![feature(maybe_uninit_write_slice)]
 
 use pgrx::prelude::*;
 
@@ -21,6 +23,7 @@ mod memory;
 mod postgres;
 mod prelude;
 mod udf;
+mod utils;
 
 pgrx::pg_module_magic!();
 

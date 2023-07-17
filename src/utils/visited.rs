@@ -7,7 +7,7 @@ impl Visited {
     pub fn new(capacity: usize) -> Self {
         Self {
             version: 0,
-            data: vec![0usize; capacity].into_boxed_slice(),
+            data: unsafe { Box::new_zeroed_slice(capacity).assume_init() },
         }
     }
     pub fn new_version(&mut self) -> VisitedVersion<'_> {

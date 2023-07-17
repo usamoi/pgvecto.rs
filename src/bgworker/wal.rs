@@ -1,11 +1,6 @@
+use byteorder::NativeEndian as N;
 use crc32fast::hash as crc32;
 use std::path::Path;
-use tokio::fs::File;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::Error;
-use tokio::io::ErrorKind;
 
 /*
 +----------+-----------+---------+
@@ -21,56 +16,56 @@ pub enum WalStatus {
     Flush,
 }
 
-pub struct Wal {
-    file: File,
+pub struct WalSync {
+    file: std::fs::File,
     offset: usize,
     status: WalStatus,
 }
 
-impl Wal {
-    pub async fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+impl WalSync {
+    pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         use WalStatus::*;
-        let file = OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .read(true)
-            .open(path)
-            .await?;
+            .open(path)?;
         Ok(Self {
             file,
             offset: 0,
             status: Read,
         })
     }
-    pub async fn create(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn create(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         use WalStatus::*;
-        let file = OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .read(true)
             .truncate(true)
-            .open(path)
-            .await?;
+            .open(path)?;
         Ok(Self {
             file,
             offset: 0,
             status: Write,
         })
     }
-    pub async fn read(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+    pub fn read(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        use byteorder::ReadBytesExt;
+        use std::io::Read;
+        use std::io::{Error, ErrorKind};
         use WalStatus::*;
         let Read = self.status else { panic!("Operation not permitted.") };
         let maybe_error: tokio::io::Result<Vec<u8>> = try {
-            let crc = self.file.read_u32().await?;
-            let len = self.file.read_u16().await?;
+            let crc = self.file.read_u32::<N>()?;
+            let len = self.file.read_u16::<N>()?;
             let mut data = vec![0u8; len as usize];
-            self.file.read_exact(&mut data).await?;
+            self.file.read_exact(&mut data)?;
             if crc32(&data) == crc {
                 self.offset += 4 + 2 + data.len();
                 data
             } else {
-                let e = Error::new(ErrorKind::UnexpectedEof, "Bad crc.");
-                Err(e)?
+                Err(Error::new(ErrorKind::UnexpectedEof, "Bad crc."))?
             }
         };
         match maybe_error {
@@ -82,15 +77,51 @@ impl Wal {
             Err(error) => anyhow::bail!(error),
         }
     }
-    pub async fn truncate(&mut self) -> anyhow::Result<()> {
+    pub fn truncate(&mut self) -> anyhow::Result<()> {
         use WalStatus::*;
         let Truncate = self.status else { panic!("Operation not permitted.") };
-        self.file.set_len(self.offset as _).await?;
-        self.file.sync_all().await?;
+        self.file.set_len(self.offset as _)?;
+        self.file.sync_all()?;
         self.status = WalStatus::Flush;
         Ok(())
     }
+    pub fn write(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
+        use byteorder::WriteBytesExt;
+        use std::io::Write;
+        use WalStatus::*;
+        let (Write | Flush) = self.status else { panic!("Operation not permitted.") };
+        self.file.write_u32::<N>(crc32(bytes))?;
+        self.file.write_u16::<N>(bytes.len() as _)?;
+        self.file.write_all(&bytes)?;
+        self.offset += 4 + 2 + bytes.len();
+        self.status = WalStatus::Write;
+        Ok(())
+    }
+    pub fn flush(&mut self) -> anyhow::Result<()> {
+        use WalStatus::*;
+        let (Write | Flush) = self.status else { panic!("Operation not permitted.") };
+        self.file.sync_all()?;
+        self.status = WalStatus::Flush;
+        Ok(())
+    }
+    pub fn into_async(self) -> WalAsync {
+        WalAsync {
+            file: tokio::fs::File::from_std(self.file),
+            offset: self.offset,
+            status: self.status,
+        }
+    }
+}
+
+pub struct WalAsync {
+    file: tokio::fs::File,
+    offset: usize,
+    status: WalStatus,
+}
+
+impl WalAsync {
     pub async fn write(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
+        use tokio::io::AsyncWriteExt;
         use WalStatus::*;
         let (Write | Flush) = self.status else { panic!("Operation not permitted.") };
         self.file.write_u32(crc32(bytes)).await?;
@@ -120,7 +151,7 @@ pub struct WalWriter {
 }
 
 impl WalWriter {
-    pub fn spawn(mut wal: Wal) -> anyhow::Result<Self> {
+    pub fn spawn(mut wal: WalAsync) -> anyhow::Result<Self> {
         use WalStatus::*;
         anyhow::ensure!(matches!(wal.status, Write | Flush));
         let (tx, mut rx) = tokio::sync::mpsc::channel(4096);
@@ -132,6 +163,7 @@ impl WalWriter {
                         wal.write(&bytes).await?;
                     }
                     Flush(callback) => {
+                        wal.flush().await?;
                         let _ = callback.send(());
                     }
                 }

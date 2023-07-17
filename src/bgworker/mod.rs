@@ -40,6 +40,7 @@ extern "C" fn pgvectors_main(_arg: pgrx::pg_sys::Datum) -> ! {
             .init();
         std::panic::set_hook(Box::new(|info| {
             log::error!("The background process panickied. {:?}", info);
+            log::error!("Backtrace: {}", std::backtrace::Backtrace::force_capture());
         }));
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

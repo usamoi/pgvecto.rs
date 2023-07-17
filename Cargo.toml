@@ -40,6 +40,8 @@ tempfile = "3.6.0"
 cstr = "0.2.11"
 arrayvec = { version = "0.7.3", features = ["serde"] }
 memmap2 = "0.7.0"
+rayon = "1.7.0"
+tokio-stream = { version = "0.1.14", features = ["fs"] }
 
 [dev-dependencies]
 pgrx-tests = { git = "https://github.com/tensorchord/pgrx.git", rev = "76c470f2f10c8d54dd0f6eb659d74c65ff0ba537" }

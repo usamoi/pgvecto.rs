@@ -1,4 +1,4 @@
-use crate::memory::{using, Ptr};
+use crate::memory::{using, Allocator, Ptr};
 use std::alloc::Layout;
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
@@ -10,26 +10,15 @@ pub struct PArray<T> {
 }
 
 impl<T> PArray<T> {
-    pub fn new(capacity: usize, block: usize) -> anyhow::Result<Self> {
-        let layout = std::alloc::Layout::array::<T>(capacity)?;
-        let ptr = using().allocate(block, layout)?.cast::<T>();
-        Ok(Self {
-            ptr: Ptr::from_raw_parts(ptr.cast(), capacity),
-            len: 0,
-        })
-    }
-    pub fn from_rust(new_capacity: usize, mut this: Vec<T>, block: usize) -> anyhow::Result<Self> {
-        anyhow::ensure!(new_capacity >= this.len());
-        let mut result = PArray::<T>::new(new_capacity, block)?;
-        for element in this.drain(..) {
-            result.push(element)?;
-        }
-        Ok(result)
+    pub fn new(capacity: usize, allocator: Allocator) -> anyhow::Result<Self> {
+        let layout = Layout::array::<T>(capacity)?;
+        let ptr = allocator.allocate(layout)?;
+        let ptr = Ptr::from_raw_parts(ptr, capacity);
+        Ok(Self { ptr, len: 0 })
     }
     pub fn clear(&mut self) {
         self.len = 0;
     }
-    #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
         self.ptr.metadata()
     }

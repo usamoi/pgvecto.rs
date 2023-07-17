@@ -1,18 +1,21 @@
 mod block;
 mod bump;
-mod collections;
+mod parray;
+mod pbox;
 
-pub use collections::*;
+pub use parray::PArray;
+pub use pbox::PBox;
 
 use self::block::Block;
-use arrayvec::ArrayVec;
+use crate::prelude::Backend;
+use serde::{Deserialize, Serialize};
 use std::alloc::{AllocError, Layout};
 use std::cell::Cell;
-use std::marker::PhantomData;
+use std::fmt::Debug;
 use std::marker::Unsize;
 use std::ptr::{NonNull, Pointee};
-
-pub const MAX_BLOCKS: usize = 16;
+use std::sync::Arc;
+use std::thread::{Scope, ScopedJoinHandle};
 
 pub unsafe auto trait Persistent {}
 
@@ -21,32 +24,31 @@ impl<T> !Persistent for *mut T {}
 impl<T> !Persistent for &'_ T {}
 impl<T> !Persistent for &'_ mut T {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PhantomNonpersistent;
-
-impl !Persistent for PhantomNonpersistent {}
-
 #[repr(transparent)]
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Address(usize);
 
+impl Debug for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({:?}, {:#x})", self.backend(), self.offset())
+    }
+}
+
 impl Address {
-    pub fn block(self) -> usize {
-        (self.0 >> 57) & ((1usize << 4) - 1)
+    pub fn backend(self) -> Backend {
+        use Backend::*;
+        if Ram as usize == (self.0 >> 63) {
+            Backend::Ram
+        } else {
+            Backend::Disk
+        }
     }
     pub fn offset(self) -> usize {
-        (self.0 >> 0) & ((1usize << 57) - 1)
+        self.0 & ((1usize << 63) - 1)
     }
-    pub fn new(block: usize, offset: usize) -> Self {
-        assert!(block < (1 << 4));
-        assert!(offset < (1 << 57));
-        Self(block << 57 | offset << 0)
-    }
-    #[allow(dead_code)]
-    pub fn add(self, bytes: usize) -> Self {
-        Self::new(self.block(), self.offset() + bytes)
+    pub fn new(backend: Backend, offset: usize) -> Self {
+        debug_assert!(offset < (1 << 63));
+        Self((backend as usize) << 63 | offset << 0)
     }
 }
 
@@ -55,11 +57,20 @@ impl Address {
 pub struct Ptr<T: ?Sized> {
     address: Address,
     metadata: <T as Pointee>::Metadata,
-    _data: PhantomData<T>,
-    _nonpersistent: PhantomNonpersistent,
 }
 
-impl<T: ?Sized> Copy for Ptr<T> {}
+impl<T: ?Sized> Debug for Ptr<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if std::mem::size_of::<<T as Pointee>::Metadata>() == 0 {
+            write!(f, "({:?})", self.address())
+        } else if std::mem::size_of::<<T as Pointee>::Metadata>() == std::mem::size_of::<usize>() {
+            let metadata = unsafe { std::mem::transmute_copy::<_, usize>(&self.metadata()) };
+            write!(f, "({:?}, {:#x})", self.address(), metadata)
+        } else {
+            write!(f, "({:?}, ?)", self.address())
+        }
+    }
+}
 
 impl<T: ?Sized> Clone for Ptr<T> {
     fn clone(&self) -> Self {
@@ -67,49 +78,38 @@ impl<T: ?Sized> Clone for Ptr<T> {
     }
 }
 
-static_assertions::const_assert_eq!(std::mem::size_of::<Ptr<u8>>(), 8);
-static_assertions::const_assert_eq!(std::mem::size_of::<Ptr<[u8]>>(), 16);
-
-unsafe impl<T: ?Sized> Persistent for Ptr<T>
-where
-    T: Persistent,
-    <T as Pointee>::Metadata: Persistent,
-{
-}
+impl<T: ?Sized> Copy for Ptr<T> {}
 
 impl<T: ?Sized> Ptr<T> {
-    pub fn cast<U>(self) -> Ptr<U>
-    where
-        U: Sized,
-    {
-        Ptr {
-            address: self.address,
-            metadata: (),
-            _data: PhantomData,
-            _nonpersistent: PhantomNonpersistent,
-        }
+    pub fn backend(self) -> Backend {
+        self.address.backend()
+    }
+    pub fn offset(self) -> usize {
+        self.address.offset()
+    }
+    pub fn address(self) -> Address {
+        self.address
+    }
+    pub fn metadata(self) -> <T as Pointee>::Metadata {
+        self.metadata
+    }
+    pub fn new(address: Address, metadata: <T as Pointee>::Metadata) -> Self {
+        Self { address, metadata }
+    }
+    pub fn cast<U: Sized>(self) -> Ptr<U> {
+        Ptr::new(self.address, ())
     }
     #[allow(dead_code)]
-    pub fn coerice<U>(self) -> Ptr<U>
+    pub fn coerice<U: ?Sized>(self) -> Ptr<U>
     where
         T: Unsize<U>,
-        U: ?Sized,
     {
+        let data_address = self.cast();
         let metadata = std::ptr::metadata(self.as_mut_ptr() as *mut U);
-        Ptr {
-            address: self.address,
-            metadata,
-            _data: PhantomData,
-            _nonpersistent: PhantomNonpersistent,
-        }
+        Ptr::from_raw_parts(data_address, metadata)
     }
     pub fn from_raw_parts(data_address: Ptr<()>, metadata: <T as Pointee>::Metadata) -> Self {
-        Self {
-            address: data_address.address,
-            metadata,
-            _data: PhantomData,
-            _nonpersistent: PhantomNonpersistent,
-        }
+        Ptr::new(data_address.address(), metadata)
     }
     pub fn as_ptr(self) -> *const T {
         using().lookup(self)
@@ -123,60 +123,56 @@ impl<T: ?Sized> Ptr<T> {
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         &mut *self.as_mut_ptr()
     }
-    pub fn block(self) -> usize {
-        self.address.block()
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Allocator {
+    backend: Backend,
+}
+
+impl Allocator {
+    pub fn allocate(&self, layout: Layout) -> Result<Ptr<()>, AllocError> {
+        use Backend::*;
+        let offset = match self.backend {
+            Ram => using().block_ram.allocate(layout),
+            Disk => using().block_disk.allocate(layout),
+        }?;
+        let address = Address::new(self.backend, offset);
+        let ptr = Ptr::new(address, ());
+        Ok(ptr)
     }
-    pub fn offset(self) -> usize {
-        self.address.offset()
-    }
-    pub fn address(self) -> Address {
-        self.address
-    }
-    pub fn metadata(self) -> <T as Pointee>::Metadata {
-        self.metadata
-    }
-    pub fn new(address: Address, metadata: <T as Pointee>::Metadata) -> Self {
-        Self {
-            address,
-            metadata,
-            _data: PhantomData,
-            _nonpersistent: PhantomNonpersistent,
-        }
-    }
-    #[allow(dead_code)]
-    pub fn add(self, count: usize) -> Self
-    where
-        T: Sized,
-    {
-        Self {
-            address: self.address.add(count * std::mem::size_of::<T>()),
-            metadata: (),
-            _data: PhantomData,
-            _nonpersistent: PhantomNonpersistent,
-        }
+    pub fn allocate_zeroed(&self, layout: Layout) -> Result<Ptr<()>, AllocError> {
+        use Backend::*;
+        let offset = match self.backend {
+            Ram => using().block_ram.allocate_zeroed(layout),
+            Disk => using().block_disk.allocate_zeroed(layout),
+        }?;
+        let address = Address::new(self.backend, offset);
+        let ptr = Ptr::new(address, ());
+        Ok(ptr)
     }
 }
 
 #[thread_local]
-static CONTEXT: Cell<Option<ContextPtr>> = Cell::new(None);
+static CONTEXT: Cell<Option<NonNull<Context>>> = Cell::new(None);
 
-pub unsafe fn given(new_context: ContextPtr) -> impl Drop {
-    pub struct Given(());
+pub unsafe fn given(p: NonNull<Context>) -> impl Drop {
+    pub struct Given {
+        prev: Option<NonNull<Context>>,
+    }
     impl Drop for Given {
         fn drop(&mut self) {
-            let context = CONTEXT.get();
-            if context.is_none() {
-                unreachable!();
-            }
-            CONTEXT.set(None);
+            CONTEXT.replace(self.prev.take());
         }
     }
-    let context = CONTEXT.get();
-    if context.is_some() {
-        panic!("Already given a context.");
+    let given = Given {
+        prev: CONTEXT.get(),
+    };
+    if let Some(prev) = given.prev.clone() {
+        assert!(p == prev);
     }
-    CONTEXT.set(Some(new_context));
-    Given(())
+    CONTEXT.replace(Some(p));
+    given
 }
 
 pub fn using<'a>() -> &'a Context {
@@ -184,93 +180,93 @@ pub fn using<'a>() -> &'a Context {
         CONTEXT
             .get()
             .expect("Never given a context to use.")
-            .0
             .as_ref()
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct ContextPtr(NonNull<Context>);
-
-unsafe impl Send for ContextPtr {}
-unsafe impl Sync for ContextPtr {}
-
-impl ContextPtr {
-    pub fn new(raw: NonNull<Context>) -> Self {
-        Self(raw)
-    }
-}
-
 pub struct Context {
-    blocks: arrayvec::ArrayVec<Block, MAX_BLOCKS>,
+    block_ram: Block,
+    block_disk: Block,
+    offsets: [usize; 2],
 }
 
 impl Context {
-    pub fn new(options: ContextOptions, create: bool) -> anyhow::Result<Self> {
-        let mut blocks = arrayvec::ArrayVec::<Block, MAX_BLOCKS>::new();
-        for block_options in options.blocks.iter() {
-            blocks.push(Block::open(block_options.clone(), create)?);
-        }
-        Ok(Self { blocks })
+    pub fn build(options: ContextOptions) -> anyhow::Result<Arc<Self>> {
+        let block_ram = Block::build(options.block_ram.0, options.block_ram.1, Backend::Ram)?;
+        let block_disk = Block::build(options.block_disk.0, options.block_disk.1, Backend::Disk)?;
+        Ok(Arc::new(Self {
+            offsets: [block_ram.address(), block_disk.address()],
+            block_ram,
+            block_disk,
+        }))
+    }
+    pub fn load(options: ContextOptions) -> anyhow::Result<Arc<Self>> {
+        let block_ram = Block::load(options.block_ram.0, options.block_ram.1, Backend::Ram)?;
+        let block_disk = Block::load(options.block_disk.0, options.block_disk.1, Backend::Disk)?;
+        Ok(Arc::new(Self {
+            offsets: [block_ram.address(), block_disk.address()],
+            block_ram,
+            block_disk,
+        }))
+    }
+    pub fn allocator(&self, backend: Backend) -> Allocator {
+        Allocator { backend }
     }
     pub fn persist(&self) -> anyhow::Result<()> {
-        for blocks in self.blocks.iter() {
-            blocks.persist()?;
-        }
+        self.block_ram.persist()?;
+        self.block_disk.persist()?;
         Ok(())
     }
     pub fn lookup<T: ?Sized>(&self, ptr: Ptr<T>) -> *mut T {
-        let block = ptr.block();
-        let offset = ptr.offset();
         let metadata = ptr.metadata();
-        std::ptr::from_raw_parts_mut(self.blocks[block].lookup(offset).cast(), metadata)
+        let data_address = (self.offsets[ptr.backend() as usize] + ptr.offset()) as _;
+        std::ptr::from_raw_parts_mut(data_address, metadata)
     }
-    pub fn allocate(&self, block: usize, layout: Layout) -> Result<Ptr<u8>, AllocError> {
-        let offset = self.blocks[block].allocate(layout)?;
-        let address = Address::new(block, offset);
-        let ptr = Ptr::new(address, ());
-        Ok(ptr)
-    }
-    pub unsafe fn deallocate(&self, ptr: Ptr<u8>, layout: Layout) {
-        let block = ptr.block();
+    pub unsafe fn deallocate(&self, ptr: Ptr<()>, layout: Layout) {
+        use Backend::*;
         let offset = ptr.offset();
-        self.blocks[block].deallocate(offset, layout);
+        match ptr.backend() {
+            Ram => self.block_ram.deallocate(offset, layout),
+            Disk => self.block_disk.deallocate(offset, layout),
+        }
+    }
+    pub fn scope<'env, F, T>(&self, f: F) -> T
+    where
+        F: for<'scope> FnOnce(&'scope ContextScope<'scope, 'env>) -> T,
+    {
+        std::thread::scope(|scope| {
+            f(unsafe { std::mem::transmute::<&Scope, &ContextScope>(scope) })
+        })
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContextOptions {
-    pub blocks: ArrayVec<BlockOptions, MAX_BLOCKS>,
+    pub block_ram: (usize, String),
+    pub block_disk: (usize, String),
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlockOptions {
-    pub persistent_path: String,
-    pub block_type: BlockType,
-    pub block_layout: BlockLayout,
-}
+#[repr(transparent)]
+pub struct ContextScope<'scope, 'env: 'scope>(Scope<'scope, 'env>);
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub enum BlockType {
-    OnDisk,
-    InMemory,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct BlockLayout {
-    pub size: usize,
-    pub align: usize,
-}
-
-impl BlockLayout {
-    pub fn is_vaild(self) -> bool {
-        self.size >= 4096
-            && self.size % 4096 == 0
-            && self.size <= ((1 << 57) - 4096)
-            && self.align.is_power_of_two()
-            && self.align <= 4096
+impl<'scope, 'env: 'scope> ContextScope<'scope, 'env> {
+    pub fn spawn<F, T>(&'scope self, f: F) -> ScopedJoinHandle<'scope, T>
+    where
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope,
+    {
+        struct AssertSend<T>(T);
+        impl<T> AssertSend<T> {
+            fn cosume(self) -> T {
+                self.0
+            }
+        }
+        unsafe impl<T> Send for AssertSend<T> {}
+        let wrapped = AssertSend(CONTEXT.get().unwrap());
+        self.0.spawn(move || {
+            let context = wrapped.cosume();
+            let _given = unsafe { given(context) };
+            f()
+        })
     }
 }

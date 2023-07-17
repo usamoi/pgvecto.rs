@@ -1,24 +1,25 @@
-use super::wal::Wal;
+use super::wal::WalSync;
 use super::wal::WalWriter;
-use crate::algorithms::Algo0;
-use crate::algorithms::Algo1;
-use crate::memory::BlockLayout;
+use crate::algorithms::IndexAlgo;
+use crate::algorithms::Vectors;
+use crate::memory::given;
 use crate::memory::Context;
 use crate::memory::ContextOptions;
-use crate::memory::ContextPtr;
 use crate::prelude::*;
 use dashmap::DashMap;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use tokio::io::ErrorKind;
+use tokio_stream::StreamExt;
 
 pub struct Index {
     #[allow(dead_code)]
     id: Id,
     #[allow(dead_code)]
     options: Options,
-    algo: Algo1,
+    vectors: Arc<Vectors>,
+    algo: IndexAlgo,
     version: IndexVersion,
     wal: WalWriter,
     #[allow(dead_code)]
@@ -27,110 +28,132 @@ pub struct Index {
 
 impl Index {
     pub async fn drop(id: Id) -> anyhow::Result<()> {
-        remove_file_if_exists(format!("{}_wal", id.as_u32())).await?;
-        remove_file_if_exists(format!("{}_data", id.as_u32())).await?;
+        use tokio_stream::wrappers::ReadDirStream;
+        let mut stream = ReadDirStream::new(tokio::fs::read_dir(".").await?);
+        while let Some(f) = stream.next().await {
+            let filename = f?
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("Bad filename."))?;
+            if filename.starts_with(&format!("{}_", id.as_u32())) {
+                remove_file_if_exists(filename).await?;
+            }
+        }
         Ok(())
     }
-
     pub async fn build(
         id: Id,
         options: Options,
-        data: async_channel::Receiver<(Vec<Scalar>, Pointer)>,
+        data: async_channel::Receiver<(Box<[Scalar]>, Pointer)>,
     ) -> anyhow::Result<Self> {
         Self::drop(id).await?;
-        let context;
-        let (algo, algo_forever) = {
-            let algo = Algo0::new(&options.algorithm)?;
-            context = Arc::new(Context::new(fast_make_options(id, algo.blocks()), true)?);
-            let (tx, rx) = async_channel::bounded(65536);
-            tokio::spawn(async move {
-                while let Ok((vector, p)) = data.recv().await {
-                    let _ = tx.send((vector, p.as_u48() << 16)).await;
-                }
-            });
-            let context_ptr =
-                ContextPtr::new(NonNull::new(context.as_ref() as *const Context as _).unwrap());
-            algo.build(
+        tokio::task::block_in_place(|| -> anyhow::Result<_> {
+            let context = Context::build(ContextOptions {
+                block_ram: (options.size_ram, format!("{}_data_ram", id.as_u32())),
+                block_disk: (options.size_disk, format!("{}_data_disk", id.as_u32())),
+            })?;
+            let _given = unsafe { given(NonNull::new_unchecked(Arc::as_ptr(&context).cast_mut())) };
+            let (vectors, persistent_vectors) = Vectors::build(options.clone())?;
+            let vectors = Arc::new(vectors);
+            while let Ok((vector, p)) = data.recv_blocking() {
+                let data = p.as_u48() << 16;
+                vectors.put(data, &vector)?;
+            }
+            let (algo, persistent_algorithm) = IndexAlgo::build(
+                options.algorithm.name(),
                 options.clone(),
-                rx,
-                (0..algo.blocks()).collect(),
-                context_ptr,
-            )
-            .await?
-        };
-        tokio::task::block_in_place(|| -> anyhow::Result<()> {
+                vectors.clone(),
+                vectors.len(),
+            )?;
             context.persist()?;
-            anyhow::Result::Ok(())
-        })?;
-        let version = IndexVersion::new();
-        let wal = {
-            let path_wal = format!("{}_wal", id.as_u32());
-            let mut wal = Wal::create(path_wal).await?;
-            let log = LogMeta {
-                options: options.clone(),
-                algo_forever,
+            let version = IndexVersion::new();
+            let wal = {
+                let path_wal = format!("{}_wal", id.as_u32());
+                let mut wal = WalSync::create(path_wal)?;
+                let log = LogMeta {
+                    options: options.clone(),
+                    persistent_algorithm,
+                    persistent_vectors,
+                };
+                wal.write(&log.serialize()?)?;
+                WalWriter::spawn(wal.into_async())?
             };
-            wal.write(&log.serialize()?).await?;
-            WalWriter::spawn(wal)?
-        };
-        Ok(Self {
-            id,
-            options,
-            algo,
-            version,
-            wal,
-            context,
+            Ok(Self {
+                id,
+                options,
+                vectors,
+                algo,
+                version,
+                wal,
+                context,
+            })
         })
     }
 
     pub async fn load(id: Id) -> anyhow::Result<Self> {
-        let mut wal = Wal::open(format!("{}_wal", id.as_u32())).await?;
-        let options;
-        let algo_forever;
-        {
-            let log = wal
-                .read()
-                .await?
-                .ok_or(anyhow::anyhow!(Error::IndexIsBroken))?;
-            LogMeta {
+        tokio::task::block_in_place(|| {
+            let mut wal = WalSync::open(format!("{}_wal", id.as_u32()))?;
+            let LogMeta {
                 options,
-                algo_forever,
-            } = log.deserialize::<LogMeta>()?;
-        }
-        let algo = Algo0::new(&options.algorithm)?;
-        let context = Arc::new(Context::new(fast_make_options(id, algo.blocks()), false)?);
-        let context_ptr =
-            ContextPtr::new(NonNull::new(context.as_ref() as *const Context as _).unwrap());
-        let algo = algo.load(algo_forever, context_ptr).await?;
-        let version = IndexVersion::new();
-        loop {
-            let Some(replay) = wal.read().await? else { break };
-            match replay.deserialize::<LogReplay>()? {
-                LogReplay::Insert { vector, p } => {
-                    algo.insert((vector, version.insert(p))).await?;
-                }
-                LogReplay::Delete { p } => {
-                    version.remove(p);
+                persistent_vectors,
+                persistent_algorithm,
+            } = wal
+                .read()?
+                .ok_or(anyhow::anyhow!("The index is broken."))?
+                .deserialize::<LogMeta>()?;
+            let context = Context::load(ContextOptions {
+                block_ram: (options.size_ram, format!("{}_data_ram", id.as_u32())),
+                block_disk: (options.size_disk, format!("{}_data_disk", id.as_u32())),
+            })?;
+            let _given = unsafe { given(NonNull::new_unchecked(Arc::as_ptr(&context).cast_mut())) };
+            let vectors = Arc::new(Vectors::load(options.clone(), persistent_vectors)?);
+            let algo = IndexAlgo::load(
+                options.algorithm.name(),
+                options.clone(),
+                vectors.clone(),
+                persistent_algorithm,
+            )?;
+            let version = IndexVersion::new();
+            loop {
+                let Some(replay) = wal.read()? else { break };
+                match replay.deserialize::<LogReplay>()? {
+                    LogReplay::Insert { vector, p } => {
+                        let data = version.insert(p);
+                        let index = vectors.put(data, &vector)?;
+                        algo.insert(index)?;
+                    }
+                    LogReplay::Delete { p } => {
+                        version.remove(p);
+                    }
                 }
             }
-        }
-        wal.truncate().await?;
-        wal.flush().await?;
-        let wal = WalWriter::spawn(wal)?;
-        Ok(Self {
-            id,
-            options,
-            algo,
-            version,
-            wal,
-            context,
+            wal.truncate()?;
+            wal.flush()?;
+            let wal = WalWriter::spawn(wal.into_async())?;
+            Ok(Self {
+                id,
+                options,
+                algo,
+                version,
+                wal,
+                vectors,
+                context,
+            })
         })
     }
 
-    pub async fn insert(&self, (vector, p): (Vec<Scalar>, Pointer)) -> anyhow::Result<()> {
-        self.algo
-            .insert((vector.clone(), self.version.insert(p)))
-            .await?;
+    pub async fn insert(&self, (vector, p): (Box<[Scalar]>, Pointer)) -> anyhow::Result<()> {
+        tokio::task::block_in_place(|| -> anyhow::Result<()> {
+            let _given = unsafe {
+                given(NonNull::new_unchecked(
+                    Arc::as_ptr(&self.context).cast_mut(),
+                ))
+            };
+            let data = self.version.insert(p);
+            let index = self.vectors.put(data, &vector)?;
+            self.algo.insert(index)?;
+            anyhow::Result::Ok(())
+        })?;
         let bytes = LogReplay::Insert { vector, p }.serialize()?;
         self.wal.write(bytes).await?;
         Ok(())
@@ -143,12 +166,21 @@ impl Index {
         Ok(())
     }
 
-    pub async fn search(&self, (vector, k): (Vec<Scalar>, usize)) -> anyhow::Result<Vec<Pointer>> {
-        let result = self.algo.search((vector, k)).await?;
-        Ok(result
-            .into_iter()
-            .filter_map(|(_, x)| self.version.filter(x))
-            .collect())
+    pub async fn search(&self, search: (Box<[Scalar]>, usize)) -> anyhow::Result<Vec<Pointer>> {
+        let result = tokio::task::block_in_place(|| -> anyhow::Result<_> {
+            let _given = unsafe {
+                given(NonNull::new_unchecked(
+                    Arc::as_ptr(&self.context).cast_mut(),
+                ))
+            };
+            let result = self.algo.search(search)?;
+            let result = result
+                .into_iter()
+                .filter_map(|(_, x)| self.version.filter(x))
+                .collect();
+            Ok(result)
+        })?;
+        Ok(result)
     }
 
     pub async fn flush(&self) -> anyhow::Result<()> {
@@ -215,12 +247,13 @@ impl IndexVersion {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 struct LogMeta {
     options: Options,
-    algo_forever: Vec<u8>,
+    persistent_vectors: Vec<u8>,
+    persistent_algorithm: Vec<u8>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 enum LogReplay {
-    Insert { vector: Vec<Scalar>, p: Pointer },
+    Insert { vector: Box<[Scalar]>, p: Pointer },
     Delete { p: Pointer },
 }
 
@@ -232,12 +265,16 @@ impl<T> Load<T> {
     pub fn new() -> Self {
         Self { inner: None }
     }
-    pub fn get(&self) -> Result<&T, Error> {
-        self.inner.as_ref().ok_or(Error::IndexIsUnloaded)
+    pub fn get(&self) -> anyhow::Result<&T> {
+        self.inner
+            .as_ref()
+            .ok_or(anyhow::anyhow!("The index is not loaded."))
     }
     #[allow(dead_code)]
-    pub fn get_mut(&mut self) -> Result<&mut T, Error> {
-        self.inner.as_mut().ok_or(Error::IndexIsUnloaded)
+    pub fn get_mut(&mut self) -> anyhow::Result<&mut T> {
+        self.inner
+            .as_mut()
+            .ok_or(anyhow::anyhow!("The index is not loaded."))
     }
     pub fn load(&mut self, x: T) {
         assert!(self.inner.is_none());
@@ -261,22 +298,4 @@ async fn remove_file_if_exists(path: impl AsRef<Path>) -> std::io::Result<()> {
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
-}
-
-fn fast_make_options(id: Id, len: usize) -> ContextOptions {
-    use crate::memory::BlockOptions;
-    use crate::memory::MAX_BLOCKS;
-    use arrayvec::ArrayVec;
-    let mut blocks = ArrayVec::<BlockOptions, MAX_BLOCKS>::new();
-    for i in 0..len {
-        blocks.push(BlockOptions {
-            persistent_path: format!("{}_data_{}", id.as_u32(), i),
-            block_type: crate::memory::BlockType::InMemory,
-            block_layout: BlockLayout {
-                size: 1 << 32,
-                align: 4096,
-            },
-        });
-    }
-    ContextOptions { blocks }
 }

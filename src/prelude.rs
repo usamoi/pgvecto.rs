@@ -1,16 +1,12 @@
+use std::sync::Arc;
+
+use crate::algorithms::Flat;
+use crate::algorithms::Hnsw;
+use crate::algorithms::Ivf;
+use crate::algorithms::Vectors;
 use serde::{Deserialize, Serialize};
 
 pub type Scalar = f32;
-
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-pub enum Error {
-    #[error("The index is broken.")]
-    IndexIsBroken,
-    #[error("The index is not loaded.")]
-    IndexIsUnloaded,
-    #[error("Build an index with an invaild option.")]
-    BuildOptionIsInvaild,
-}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Id {
@@ -22,14 +18,6 @@ impl Id {
         Self {
             newtype: sys.as_u32(),
         }
-    }
-    #[allow(dead_code)]
-    pub fn into_sys(self) -> pgrx::pg_sys::Oid {
-        unsafe { pgrx::pg_sys::Oid::from_u32_unchecked(self.newtype) }
-    }
-    #[allow(dead_code)]
-    pub fn from_u32(value: u32) -> Self {
-        Self { newtype: value }
     }
     pub fn as_u32(self) -> u32 {
         self.newtype
@@ -67,12 +55,70 @@ impl Pointer {
     }
 }
 
+pub trait Algorithm: Sized {
+    type Options: Clone + serde::Serialize + serde::de::DeserializeOwned;
+    fn build(options: Options, vectors: Arc<Vectors>, n: usize) -> anyhow::Result<(Self, Vec<u8>)>;
+    fn load(options: Options, vectors: Arc<Vectors>, persistent: Vec<u8>) -> anyhow::Result<Self>;
+    fn insert(&self, i: usize) -> anyhow::Result<()>;
+    fn search(&self, search: (Box<[Scalar]>, usize)) -> anyhow::Result<Vec<(Scalar, u64)>>;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Options {
     pub dims: u16,
     pub distance: Distance,
-    pub algorithm: String,
-    pub options_algorithm: String,
+    pub capacity: usize,
+    pub size_ram: usize,
+    pub size_disk: usize,
+    pub backend_vectors: Backend,
+    pub algorithm: AlgorithmOptions,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[repr(u8)]
+pub enum Backend {
+    Ram = 0,
+    Disk = 1,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum AlgorithmOptions {
+    Hnsw(<Hnsw as Algorithm>::Options),
+    Flat(<Flat as Algorithm>::Options),
+    Ivf(<Ivf as Algorithm>::Options),
+}
+
+impl AlgorithmOptions {
+    pub fn name(&self) -> &str {
+        use AlgorithmOptions::*;
+        match self {
+            Hnsw(_) => "Hnsw",
+            Flat(_) => "Flat",
+            Ivf(_) => "Ivf",
+        }
+    }
+    pub fn unwrap_hnsw(self) -> <Hnsw as Algorithm>::Options {
+        use AlgorithmOptions::*;
+        match self {
+            Hnsw(x) => x,
+            _ => unreachable!(),
+        }
+    }
+    #[allow(dead_code)]
+    pub fn unwrap_flat(self) -> <Flat as Algorithm>::Options {
+        use AlgorithmOptions::*;
+        match self {
+            Flat(x) => x,
+            _ => unreachable!(),
+        }
+    }
+    pub fn unwrap_ivf(self) -> <Ivf as Algorithm>::Options {
+        use AlgorithmOptions::*;
+        match self {
+            Ivf(x) => x,
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -84,37 +130,61 @@ pub enum Distance {
 
 impl Distance {
     pub fn distance(self, lhs: &[Scalar], rhs: &[Scalar]) -> Scalar {
+        match self {
+            Distance::L2 => Self::l2(lhs, rhs),
+            Distance::Cosine => Self::cosine(lhs, rhs),
+            Distance::Dot => Self::dot(lhs, rhs),
+        }
+    }
+    pub fn l2(lhs: &[Scalar], rhs: &[Scalar]) -> Scalar {
+        use core::intrinsics::fadd_fast as add;
+        use core::intrinsics::fmul_fast as mul;
+        use core::intrinsics::fsub_fast as sub;
         if lhs.len() != rhs.len() {
             return Scalar::NAN;
         }
         let n = lhs.len();
-        match self {
-            Distance::L2 => {
-                let mut result = 0.0 as Scalar;
-                for i in 0..n {
-                    result += (lhs[i] - rhs[i]) * (lhs[i] - rhs[i]);
-                }
-                result
-            }
-            Distance::Cosine => {
-                let mut dot = 0.0 as Scalar;
-                let mut x2 = 0.0 as Scalar;
-                let mut y2 = 0.0 as Scalar;
-                for i in 0..n {
-                    dot += lhs[i] * rhs[i];
-                    x2 += lhs[i] * lhs[i];
-                    y2 += rhs[i] * rhs[i];
-                }
-                1.0 - dot * dot / (x2 * y2)
-            }
-            Distance::Dot => {
-                let mut dot = 0.0 as Scalar;
-                for i in 0..n {
-                    dot += lhs[i] * rhs[i];
-                }
-                1.0 - dot
+        let mut result = 0.0 as Scalar;
+        for i in 0..n {
+            unsafe {
+                result = add(result, mul(sub(lhs[i], rhs[i]), sub(lhs[i], rhs[i])));
             }
         }
+        result
+    }
+    pub fn cosine(lhs: &[Scalar], rhs: &[Scalar]) -> Scalar {
+        use core::intrinsics::fadd_fast as add;
+        use core::intrinsics::fmul_fast as mul;
+        if lhs.len() != rhs.len() {
+            return Scalar::NAN;
+        }
+        let n = lhs.len();
+        let mut dot = 0.0 as Scalar;
+        let mut x2 = 0.0 as Scalar;
+        let mut y2 = 0.0 as Scalar;
+        for i in 0..n {
+            unsafe {
+                dot = add(dot, mul(lhs[i], rhs[i]));
+                x2 = add(x2, mul(lhs[i], lhs[i]));
+                y2 = add(y2, mul(rhs[i], rhs[i]));
+            }
+        }
+        1.0 - dot * dot / (x2 * y2)
+    }
+    pub fn dot(lhs: &[Scalar], rhs: &[Scalar]) -> Scalar {
+        use core::intrinsics::fadd_fast as add;
+        use core::intrinsics::fmul_fast as mul;
+        if lhs.len() != rhs.len() {
+            return Scalar::NAN;
+        }
+        let n = lhs.len();
+        let mut dot = 0.0 as Scalar;
+        for i in 0..n {
+            unsafe {
+                dot = add(dot, mul(lhs[i], rhs[i]));
+            }
+        }
+        1.0 - dot
     }
 }
 

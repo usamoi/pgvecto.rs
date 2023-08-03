@@ -123,6 +123,7 @@ jobs:
           cargo pgrx package
           mkdir ./artifacts
           mv ./target/release/vectors-pg${{ matrix.version }}/usr ./artifacts/usr
+          cd artifacts
           fpm \
             --input-type dir \
             --output-type deb \
@@ -130,29 +131,10 @@ jobs:
             --version ${{ needs.setup.outputs.version }} \
             --license apache2 \
             --deb-no-default-config-files \
-            --package ./vectors-pg${{ matrix.version }}-${{ needs.setup.outputs.version }}-amd64-unknown-linux-gnu.deb \
+            --package ../vectors-pg${{ matrix.version }}-${{ needs.setup.outputs.version }}-amd64-unknown-linux-gnu.deb \
             --architecture amd64 \
-            ./artifacts
-          fpm \
-            --input-type dir \
-            --output-type rpm \
-            --name vectors-pg${{ matrix.version }} \
-            --version ${{ needs.setup.outputs.version }} \
-            --license apache2 \
-            --deb-no-default-config-files \
-            --package ./vectors-pg${{ matrix.version }}-${{ needs.setup.outputs.version }}-x86_64-unknown-linux-gnu.rpm \
-            --architecture x86_64 \
-            ./artifacts
-          fpm \
-            --input-type dir \
-            --output-type pacman \
-            --name vectors-pg${{ matrix.version }} \
-            --version ${{ needs.setup.outputs.version }} \
-            --license apache2 \
-            --deb-no-default-config-files \
-            --package ./vectors-pg${{ matrix.version }}-${{ needs.setup.outputs.version }}-x86_64-unknown-linux-gnu.tar.zst \
-            --architecture x86_64 \
-            ./artifacts
+            .
+          cd ..
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1

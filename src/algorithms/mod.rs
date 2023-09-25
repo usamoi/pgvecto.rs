@@ -2,6 +2,7 @@ mod flat;
 mod hnsw;
 mod impls;
 mod ivf;
+mod quantization;
 mod utils;
 
 pub use flat::{Flat, FlatOptions};
@@ -62,15 +63,9 @@ impl AlgorithmOptions {
 }
 
 pub enum Algorithm {
-    FlatL2(Flat<L2>),
-    FlatCosine(Flat<Cosine>),
-    FlatDot(Flat<Dot>),
-    HnswL2(Hnsw<L2>),
-    HnswCosine(Hnsw<Cosine>),
-    HnswDot(Hnsw<Dot>),
-    IvfL2(Ivf<L2>),
-    IvfCosine(Ivf<Cosine>),
-    IvfDot(Ivf<Dot>),
+    Flat(Flat),
+    Hnsw(Hnsw),
+    Ivf(Ivf),
 }
 
 impl Algorithm {
@@ -79,16 +74,10 @@ impl Algorithm {
         options: IndexOptions,
     ) -> Result<(), AlgorithmError> {
         use AlgorithmOptions as O;
-        match (options.algorithm.clone(), options.distance) {
-            (O::Flat(_), Distance::L2) => Ok(Flat::<L2>::prebuild(storage, options)?),
-            (O::Flat(_), Distance::Cosine) => Ok(Flat::<Cosine>::prebuild(storage, options)?),
-            (O::Flat(_), Distance::Dot) => Ok(Flat::<Dot>::prebuild(storage, options)?),
-            (O::Hnsw(_), Distance::L2) => Ok(Hnsw::<L2>::prebuild(storage, options)?),
-            (O::Hnsw(_), Distance::Cosine) => Ok(Hnsw::<Cosine>::prebuild(storage, options)?),
-            (O::Hnsw(_), Distance::Dot) => Ok(Hnsw::<Dot>::prebuild(storage, options)?),
-            (O::Ivf(_), Distance::L2) => Ok(Ivf::<L2>::prebuild(storage, options)?),
-            (O::Ivf(_), Distance::Cosine) => Ok(Ivf::<Cosine>::prebuild(storage, options)?),
-            (O::Ivf(_), Distance::Dot) => Ok(Ivf::<Dot>::prebuild(storage, options)?),
+        match &options.algorithm {
+            O::Flat(_) => Ok(Flat::prebuild(storage, options)?),
+            O::Hnsw(_) => Ok(Hnsw::prebuild(storage, options)?),
+            O::Ivf(_) => Ok(Ivf::prebuild(storage, options)?),
         }
     }
     pub fn build(
@@ -98,34 +87,10 @@ impl Algorithm {
         n: usize,
     ) -> Result<Self, AlgorithmError> {
         use AlgorithmOptions as O;
-        match (options.algorithm.clone(), options.distance) {
-            (O::Flat(_), Distance::L2) => {
-                Ok(Flat::build(storage, options, vectors, n).map(Self::FlatL2)?)
-            }
-            (O::Flat(_), Distance::Cosine) => {
-                Ok(Flat::build(storage, options, vectors, n).map(Self::FlatCosine)?)
-            }
-            (O::Flat(_), Distance::Dot) => {
-                Ok(Flat::build(storage, options, vectors, n).map(Self::FlatDot)?)
-            }
-            (O::Hnsw(_), Distance::L2) => {
-                Ok(Hnsw::build(storage, options, vectors, n).map(Self::HnswL2)?)
-            }
-            (O::Hnsw(_), Distance::Cosine) => {
-                Ok(Hnsw::build(storage, options, vectors, n).map(Self::HnswCosine)?)
-            }
-            (O::Hnsw(_), Distance::Dot) => {
-                Ok(Hnsw::build(storage, options, vectors, n).map(Self::HnswDot)?)
-            }
-            (O::Ivf(_), Distance::L2) => {
-                Ok(Ivf::build(storage, options, vectors, n).map(Self::IvfL2)?)
-            }
-            (O::Ivf(_), Distance::Cosine) => {
-                Ok(Ivf::build(storage, options, vectors, n).map(Self::IvfCosine)?)
-            }
-            (O::Ivf(_), Distance::Dot) => {
-                Ok(Ivf::build(storage, options, vectors, n).map(Self::IvfDot)?)
-            }
+        match &options.algorithm {
+            O::Flat(_) => Ok(Flat::build(storage, options, vectors, n).map(Self::Flat)?),
+            O::Hnsw(_) => Ok(Hnsw::build(storage, options, vectors, n).map(Self::Hnsw)?),
+            O::Ivf(_) => Ok(Ivf::build(storage, options, vectors, n).map(Self::Ivf)?),
         }
     }
     pub fn load(
@@ -134,46 +99,18 @@ impl Algorithm {
         vectors: Arc<Vectors>,
     ) -> Result<Self, AlgorithmError> {
         use AlgorithmOptions as O;
-        match (options.algorithm.clone(), options.distance) {
-            (O::Flat(_), Distance::L2) => {
-                Ok(Flat::load(storage, options, vectors).map(Self::FlatL2)?)
-            }
-            (O::Flat(_), Distance::Cosine) => {
-                Ok(Flat::load(storage, options, vectors).map(Self::FlatCosine)?)
-            }
-            (O::Flat(_), Distance::Dot) => {
-                Ok(Flat::load(storage, options, vectors).map(Self::FlatDot)?)
-            }
-            (O::Hnsw(_), Distance::L2) => {
-                Ok(Hnsw::load(storage, options, vectors).map(Self::HnswL2)?)
-            }
-            (O::Hnsw(_), Distance::Cosine) => {
-                Ok(Hnsw::load(storage, options, vectors).map(Self::HnswCosine)?)
-            }
-            (O::Hnsw(_), Distance::Dot) => {
-                Ok(Hnsw::load(storage, options, vectors).map(Self::HnswDot)?)
-            }
-            (O::Ivf(_), Distance::L2) => Ok(Ivf::load(storage, options, vectors).map(Self::IvfL2)?),
-            (O::Ivf(_), Distance::Cosine) => {
-                Ok(Ivf::load(storage, options, vectors).map(Self::IvfCosine)?)
-            }
-            (O::Ivf(_), Distance::Dot) => {
-                Ok(Ivf::load(storage, options, vectors).map(Self::IvfDot)?)
-            }
+        match &options.algorithm {
+            O::Flat(_) => Ok(Flat::load(storage, options, vectors).map(Self::Flat)?),
+            O::Hnsw(_) => Ok(Hnsw::load(storage, options, vectors).map(Self::Hnsw)?),
+            O::Ivf(_) => Ok(Ivf::load(storage, options, vectors).map(Self::Ivf)?),
         }
     }
     pub fn insert(&self, insert: usize) -> Result<(), AlgorithmError> {
         use Algorithm::*;
         match self {
-            FlatL2(sel) => Ok(sel.insert(insert)?),
-            FlatCosine(sel) => Ok(sel.insert(insert)?),
-            FlatDot(sel) => Ok(sel.insert(insert)?),
-            HnswL2(sel) => Ok(sel.insert(insert)?),
-            HnswCosine(sel) => Ok(sel.insert(insert)?),
-            HnswDot(sel) => Ok(sel.insert(insert)?),
-            IvfL2(sel) => Ok(sel.insert(insert)?),
-            IvfCosine(sel) => Ok(sel.insert(insert)?),
-            IvfDot(sel) => Ok(sel.insert(insert)?),
+            Flat(sel) => Ok(sel.insert(insert)?),
+            Hnsw(sel) => Ok(sel.insert(insert)?),
+            Ivf(sel) => Ok(sel.insert(insert)?),
         }
     }
     pub fn search<F>(
@@ -187,15 +124,9 @@ impl Algorithm {
     {
         use Algorithm::*;
         match self {
-            FlatL2(sel) => Ok(sel.search(target, k, filter)?),
-            FlatCosine(sel) => Ok(sel.search(target, k, filter)?),
-            FlatDot(sel) => Ok(sel.search(target, k, filter)?),
-            HnswL2(sel) => Ok(sel.search(target, k, filter)?),
-            HnswCosine(sel) => Ok(sel.search(target, k, filter)?),
-            HnswDot(sel) => Ok(sel.search(target, k, filter)?),
-            IvfL2(sel) => Ok(sel.search(target, k, filter)?),
-            IvfCosine(sel) => Ok(sel.search(target, k, filter)?),
-            IvfDot(sel) => Ok(sel.search(target, k, filter)?),
+            Flat(sel) => Ok(sel.search(target, k, filter)?),
+            Hnsw(sel) => Ok(sel.search(target, k, filter)?),
+            Ivf(sel) => Ok(sel.search(target, k, filter)?),
         }
     }
 }

@@ -1,9 +1,9 @@
-use crate::algorithms::AlgorithmOptions;
-use crate::bgworker::index::IndexOptions;
-use crate::bgworker::vectors::VectorsOptions;
 use crate::postgres::datatype::VectorTypmod;
-use crate::prelude::*;
 use serde::{Deserialize, Serialize};
+use service::algorithms::AlgorithmOptions;
+use service::bgworker::index::IndexOptions;
+use service::bgworker::vectors::VectorsOptions;
+use service::prelude::*;
 use std::ffi::CStr;
 use validator::Validate;
 

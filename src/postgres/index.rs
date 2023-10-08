@@ -3,7 +3,7 @@ use super::index_scan;
 use super::index_setup;
 use super::index_update;
 use crate::postgres::datatype::VectorInput;
-use crate::prelude::*;
+use service::prelude::*;
 use std::cell::Cell;
 
 #[thread_local]

@@ -1,5 +1,5 @@
 use crate::postgres::hook_transaction::client;
-use crate::prelude::*;
+use service::prelude::*;
 
 #[pgrx::pg_extern(strict)]
 unsafe fn vectors_load(oid: pgrx::pg_sys::Oid) {

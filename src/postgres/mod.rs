@@ -1,3 +1,4 @@
+mod bgworker;
 mod casts;
 pub mod datatype;
 mod functions;

@@ -1,6 +1,6 @@
 use super::hook_transaction::drop_if_commit;
 use crate::postgres::index_scan::Scanner;
-use crate::prelude::*;
+use service::prelude::*;
 use std::ptr::null_mut;
 
 type PlanstateTreeWalker =

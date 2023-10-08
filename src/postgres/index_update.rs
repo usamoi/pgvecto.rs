@@ -1,5 +1,5 @@
 use crate::postgres::hook_transaction::{client, flush_if_commit};
-use crate::prelude::*;
+use service::prelude::*;
 
 pub unsafe fn update_insert(id: Id, vector: Box<[Scalar]>, tid: pgrx::pg_sys::ItemPointer) {
     flush_if_commit(id);

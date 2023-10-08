@@ -1,4 +1,3 @@
-use crate::prelude::*;
 use pgrx::pg_sys::Datum;
 use pgrx::pg_sys::Oid;
 use pgrx::pgrx_sql_entity_graph::metadata::ArgumentError;
@@ -10,6 +9,7 @@ use pgrx::Array;
 use pgrx::FromDatum;
 use pgrx::IntoDatum;
 use serde::{Deserialize, Serialize};
+use service::prelude::*;
 use std::alloc::Allocator;
 use std::alloc::Global;
 use std::alloc::Layout;

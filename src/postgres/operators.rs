@@ -1,5 +1,5 @@
 use crate::postgres::datatype::{Vector, VectorInput, VectorOutput};
-use crate::prelude::*;
+use service::prelude::*;
 use std::ops::Deref;
 
 #[pgrx::pg_operator(immutable, parallel_safe, requires = ["vector"])]

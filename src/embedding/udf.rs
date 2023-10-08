@@ -3,9 +3,9 @@ use super::Embedding;
 use crate::postgres::datatype::Vector;
 use crate::postgres::datatype::VectorOutput;
 use crate::postgres::gucs::OPENAI_API_KEY_GUC;
-use crate::prelude::Float;
-use crate::prelude::Scalar;
 use pgrx::prelude::*;
+use service::prelude::Float;
+use service::prelude::Scalar;
 
 #[pg_extern]
 fn ai_embedding_vector(input: String) -> VectorOutput {

@@ -1,7 +1,7 @@
 use super::hook_transaction::{client, flush_if_commit};
-use crate::ipc::client::{BuildHandle, BuildHandler};
 use crate::postgres::index_setup::options;
-use crate::prelude::*;
+use service::ipc::client::{BuildHandle, BuildHandler};
+use service::prelude::*;
 
 pub struct Builder {
     pub build_handler: Option<BuildHandler>,

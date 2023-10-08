@@ -1,22 +1,62 @@
 [package]
 name = "vectors"
-version = "0.1.1"
-edition = "2021"
+version = { workspace = true }
+edition = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]
 
 [features]
 default = ["pg15"]
-pg11 = ["pgrx/pg11", "pgrx-tests/pg11"]
-pg12 = ["pgrx/pg12", "pgrx-tests/pg12"]
-pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
-pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
-pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
+pg11 = ["pgrx/pg11", "pgrx-tests/pg11", "service/pg11"]
+pg12 = ["pgrx/pg12", "pgrx-tests/pg12", "service/pg12"]
+pg13 = ["pgrx/pg13", "pgrx-tests/pg13", "service/pg13"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "service/pg14"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15", "service/pg15"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16", "service/pg16"]
 pg_test = []
 
 [dependencies]
+pgrx = { workspace = true }
+openai_api_rust = { workspace = true }
+static_assertions = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+rand = { workspace = true }
+byteorder = { workspace = true }
+crc32fast = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+crossbeam = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+memoffset = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+cstr = { workspace = true }
+arrayvec = { workspace = true }
+memmap2 = { workspace = true }
+validator = { workspace = true }
+toml = { workspace = true }
+rayon = { workspace = true }
+service = { path = "./service" }
+
+[dev-dependencies]
+pgrx-tests = { workspace = true }
+httpmock = { workspace = true }
+mockall = { workspace = true }
+
+[workspace]
+resolver = "2"
+members = ["service"]
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+
+[workspace.dependencies]
 pgrx = { git = "https://github.com/tensorchord/pgrx.git", rev = "c0d11a8b78b0d707a5e9106bc4d5f66395ca9a2e" }
 openai_api_rust = { git = "https://github.com/tensorchord/openai-api.git", rev = "228d54b6002e98257b3c81501a054942342f585f" }
 static_assertions = "1.1.0"
@@ -41,8 +81,6 @@ memmap2 = "0.7.0"
 validator = { version = "0.16.1", features = ["derive"] }
 toml = "0.7.6"
 rayon = "1.6.1"
-
-[dev-dependencies]
 pgrx-tests = { git = "https://github.com/tensorchord/pgrx.git", rev = "c0d11a8b78b0d707a5e9106bc4d5f66395ca9a2e" }
 httpmock = "0.6"
 mockall = "0.11.4"

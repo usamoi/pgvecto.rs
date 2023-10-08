@@ -1,0 +1,39 @@
+[package]
+name = "service"
+version = { workspace = true }
+edition = { workspace = true }
+
+[features]
+default = ["pg15"]
+pg11 = ["pgrx/pg11"]
+pg12 = ["pgrx/pg12"]
+pg13 = ["pgrx/pg13"]
+pg14 = ["pgrx/pg14"]
+pg15 = ["pgrx/pg15"]
+pg16 = ["pgrx/pg16"]
+
+[dependencies]
+pgrx = { workspace = true }
+openai_api_rust = { workspace = true }
+static_assertions = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+rand = { workspace = true }
+byteorder = { workspace = true }
+crc32fast = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+crossbeam = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+memoffset = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+cstr = { workspace = true }
+arrayvec = { workspace = true }
+memmap2 = { workspace = true }
+validator = { workspace = true }
+toml = { workspace = true }
+rayon = { workspace = true }

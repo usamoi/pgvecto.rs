@@ -1,7 +1,7 @@
 use crate::postgres::datatype::VectorInput;
 use crate::postgres::gucs::K;
-use crate::prelude::*;
 use pgrx::FromDatum;
+use service::prelude::*;
 
 use super::hook_transaction::client;
 
@@ -139,7 +139,7 @@ pub unsafe fn next_scan(scan: pgrx::pg_sys::IndexScanDesc) -> bool {
                 let mut handler = rpc.search(id, vector, k).unwrap();
                 let mut res;
                 let rpc = loop {
-                    use crate::ipc::client::SearchHandle::*;
+                    use service::ipc::client::SearchHandle::*;
                     match handler.handle().unwrap() {
                         Check { p, x } => {
                             let result = check(index_scan_state, p);
@@ -165,7 +165,7 @@ pub unsafe fn next_scan(scan: pgrx::pg_sys::IndexScanDesc) -> bool {
                 let mut handler = rpc.search(id, vector, k).unwrap();
                 let mut res;
                 let rpc = loop {
-                    use crate::ipc::client::SearchHandle::*;
+                    use service::ipc::client::SearchHandle::*;
                     match handler.handle().unwrap() {
                         Check { p: _, x } => {
                             handler = x.leave(true).unwrap();

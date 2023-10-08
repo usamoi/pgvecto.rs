@@ -1,6 +1,6 @@
-use crate::ipc::client::Rpc;
-use crate::ipc::connect;
-use crate::prelude::*;
+use service::ipc::client::Rpc;
+use service::ipc::connect;
+use service::prelude::*;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 

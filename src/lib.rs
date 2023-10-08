@@ -14,12 +14,8 @@
 #![allow(clippy::complexity)]
 #![allow(clippy::style)]
 
-mod algorithms;
-mod bgworker;
 mod embedding;
-mod ipc;
 mod postgres;
-mod prelude;
 
 pgrx::pg_module_magic!();
 
@@ -37,7 +33,7 @@ pub unsafe extern "C" fn _PG_init() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
     BackgroundWorkerBuilder::new("vectors")
-        .set_function("vectors_main")
+        .set_function("bgworker")
         .set_library("vectors")
         .set_argument(None)
         .enable_shmem_access(None)

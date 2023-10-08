@@ -15,18 +15,7 @@ use std::fs::OpenOptions;
 use std::mem::MaybeUninit;
 use thiserror::Error;
 
-#[no_mangle]
-extern "C" fn vectors_main(_arg: pgrx::pg_sys::Datum) -> ! {
-    match std::panic::catch_unwind(thread_main) {
-        Ok(never) => never,
-        Err(_) => {
-            log::error!("The background process crashed.");
-            pgrx::PANIC!("The background process crashed.");
-        }
-    }
-}
-
-fn thread_main() -> ! {
+pub fn main() -> ! {
     std::fs::create_dir_all("pg_vectors").expect("Failed to create the directory.");
     std::env::set_current_dir("pg_vectors").expect("Failed to set the current variable.");
     unsafe {

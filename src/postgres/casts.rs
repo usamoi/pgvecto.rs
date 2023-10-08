@@ -1,5 +1,5 @@
 use super::datatype::{Vector, VectorInput, VectorOutput, VectorTypmod};
-use crate::prelude::Scalar;
+use service::prelude::Scalar;
 
 #[pgrx::pg_extern]
 fn cast_array_to_vector(array: pgrx::Array<Scalar>, typmod: i32, _explicit: bool) -> VectorOutput {

@@ -1,7 +1,7 @@
 pub mod client;
 mod packet;
 pub mod server;
-mod transport;
+pub mod transport;
 mod transport_tcp;
 mod transport_unix;
 
@@ -26,15 +26,15 @@ pub enum ClientIpcError {
     Server,
 }
 
-pub fn listen() -> impl Iterator<Item = RpcHandler> {
-    let mut listener = self::transport::Listener::new(Address::Unix("./pg_vectors/_socket".into()));
+pub fn listen(addr: Address) -> impl Iterator<Item = RpcHandler> {
+    let mut listener = self::transport::Listener::new(addr);
     std::iter::from_fn(move || {
         let socket = listener.accept();
         Some(self::server::RpcHandler::new(socket))
     })
 }
 
-pub fn connect() -> Rpc {
-    let socket = self::transport::Socket::new(Address::Unix("./_socket".into()));
+pub fn connect(addr: Address) -> Rpc {
+    let socket = self::transport::Socket::new(addr);
     self::client::Rpc::new(socket)
 }

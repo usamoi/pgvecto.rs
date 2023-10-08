@@ -1,3 +1,4 @@
+use super::gucs::addr;
 use service::ipc::client::Rpc;
 use service::ipc::connect;
 use service::prelude::*;
@@ -47,7 +48,7 @@ where
     F: FnOnce(Rpc) -> Rpc,
 {
     let mut guard = CLIENT.borrow_mut();
-    let client = guard.take().unwrap_or_else(|| connect());
+    let client = guard.take().unwrap_or_else(|| connect(addr()));
     let client = f(client);
     *guard = Some(client);
 }

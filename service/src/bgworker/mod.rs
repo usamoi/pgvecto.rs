@@ -7,17 +7,24 @@ pub mod wal;
 
 use self::index::IndexError;
 use crate::ipc::server::RpcHandler;
+use crate::ipc::transport::Address;
 use crate::ipc::ServerIpcError;
 use crate::prelude::*;
 use dashmap::DashMap;
 use index::Index;
 use std::fs::OpenOptions;
 use std::mem::MaybeUninit;
+use std::path::PathBuf;
 use thiserror::Error;
 
-pub fn main() -> ! {
-    std::fs::create_dir_all("pg_vectors").expect("Failed to create the directory.");
-    std::env::set_current_dir("pg_vectors").expect("Failed to set the current variable.");
+#[derive(Debug, Clone)]
+pub struct WorkerOptions {
+    pub addr: Address,
+    pub chdir: PathBuf,
+}
+
+pub fn main(options: WorkerOptions) -> ! {
+    std::env::set_current_dir(&options.chdir).expect("Failed to set the current variable.");
     unsafe {
         INDEXES.as_mut_ptr().write(DashMap::new());
     }
@@ -33,7 +40,10 @@ pub fn main() -> ! {
         let backtrace = std::backtrace::Backtrace::capture();
         log::error!("Process panickied. {:?}. Backtrace. {}.", info, backtrace);
     }));
-    std::thread::spawn(|| thread_listening());
+    std::thread::spawn({
+        let options = options.clone();
+        || thread_listening(options)
+    });
     loop {
         let mut sig: i32 = 0;
         unsafe {
@@ -58,12 +68,15 @@ pub fn main() -> ! {
 
 static mut INDEXES: MaybeUninit<DashMap<Id, Index>> = MaybeUninit::uninit();
 
-fn thread_listening() {
-    let listener = crate::ipc::listen();
+fn thread_listening(options: WorkerOptions) {
+    let listener = crate::ipc::listen(options.addr.clone());
     for rpc_handler in listener {
-        std::thread::spawn(move || {
-            if let Err(e) = thread_session(rpc_handler) {
-                log::error!("Session exited. {}.", e);
+        std::thread::spawn({
+            let options = options.clone();
+            move || {
+                if let Err(e) = thread_session(options, rpc_handler) {
+                    log::error!("Session exited. {}.", e);
+                }
             }
         });
     }
@@ -77,7 +90,10 @@ pub enum SessionError {
     Index(#[from] IndexError),
 }
 
-fn thread_session(mut rpc_handler: RpcHandler) -> Result<(), SessionError> {
+fn thread_session(
+    _options: WorkerOptions,
+    mut rpc_handler: RpcHandler,
+) -> Result<(), SessionError> {
     use crate::ipc::server::RpcHandle;
     loop {
         match rpc_handler.handle()? {

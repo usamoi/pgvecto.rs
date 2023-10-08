@@ -11,6 +11,7 @@
 #![feature(int_roundings)]
 #![feature(never_type)]
 #![feature(const_maybe_uninit_zeroed)]
+#![feature(addr_parse_ascii)]
 #![allow(clippy::complexity)]
 #![allow(clippy::style)]
 
@@ -32,14 +33,16 @@ pub unsafe extern "C" fn _PG_init() {
         std::env::set_var("RUST_LIB_BACKTRACE", "1");
         std::env::set_var("RUST_BACKTRACE", "1");
     }
-    BackgroundWorkerBuilder::new("vectors")
-        .set_function("bgworker")
-        .set_library("vectors")
-        .set_argument(None)
-        .enable_shmem_access(None)
-        .set_start_time(BgWorkerStartTime::PostmasterStart)
-        .load();
     self::postgres::init();
+    if self::postgres::gucs::REMOTE.get().is_none() {
+        BackgroundWorkerBuilder::new("vectors")
+            .set_function("bgworker")
+            .set_library("vectors")
+            .set_argument(None)
+            .enable_shmem_access(None)
+            .set_start_time(BgWorkerStartTime::PostmasterStart)
+            .load();
+    }
 }
 
 /// This module is required by `cargo pgrx test` invocations.

@@ -1,7 +1,11 @@
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
-use std::ffi::CStr;
+use service::ipc::transport::Address;
+use std::{ffi::CStr, net::SocketAddr};
 
 pub static OPENAI_API_KEY_GUC: GucSetting<Option<&'static CStr>> =
+    GucSetting::<Option<&'static CStr>>::new(None);
+
+pub static REMOTE: GucSetting<Option<&'static CStr>> =
     GucSetting::<Option<&'static CStr>>::new(None);
 
 pub static K: GucSetting<i32> = GucSetting::<i32>::new(64);
@@ -25,4 +29,19 @@ pub unsafe fn init() {
         GucContext::Userset,
         GucFlags::default(),
     );
+    GucRegistry::define_string_guc(
+        "vectors.remote",
+        "Remote daemon address to connect.",
+        "Remote daemon address to connect. If not set, run a background process locally.",
+        &REMOTE,
+        GucContext::Postmaster,
+        GucFlags::default(),
+    );
+}
+
+pub fn addr() -> Address {
+    match REMOTE.get() {
+        Some(s) => Address::Tcp(SocketAddr::parse_ascii(s.to_bytes()).expect("Bad address.")),
+        None => Address::Unix("./pg_vectors/_socket".into()),
+    }
 }

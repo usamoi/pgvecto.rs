@@ -2,9 +2,11 @@ pub mod client;
 mod packet;
 pub mod server;
 mod transport;
+mod transport_tcp;
+mod transport_unix;
 
-use self::client::Rpc;
 use self::server::RpcHandler;
+use self::{client::Rpc, transport::Address};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -25,7 +27,7 @@ pub enum ClientIpcError {
 }
 
 pub fn listen() -> impl Iterator<Item = RpcHandler> {
-    let mut listener = self::transport::Listener::new();
+    let mut listener = self::transport::Listener::new(Address::Unix("./pg_vectors/_socket".into()));
     std::iter::from_fn(move || {
         let socket = listener.accept();
         Some(self::server::RpcHandler::new(socket))
@@ -33,6 +35,6 @@ pub fn listen() -> impl Iterator<Item = RpcHandler> {
 }
 
 pub fn connect() -> Rpc {
-    let socket = self::transport::Socket::new();
+    let socket = self::transport::Socket::new(Address::Unix("./_socket".into()));
     self::client::Rpc::new(socket)
 }

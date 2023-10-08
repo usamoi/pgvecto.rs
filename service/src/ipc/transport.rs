@@ -1,121 +1,81 @@
 use crate::ipc::ClientIpcError;
 use crate::ipc::ServerIpcError;
-use byteorder::{ReadBytesExt, WriteBytesExt};
-use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
-use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use serde::Deserialize;
+use serde::Serialize;
+use std::path::PathBuf;
 
-macro_rules! resolve_server_closed {
-    ($t: expr) => {
-        match $t {
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Err(ServerIpcError::Closed)
-            }
-            Err(e) => panic!("{}", e),
-            Ok(e) => e,
-        }
-    };
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub enum Address {
+    Tcp(std::net::SocketAddr),
+    Unix(PathBuf),
 }
 
-macro_rules! resolve_client_closed {
-    ($t: expr) => {
-        match $t {
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Err(ClientIpcError::Closed)
-            }
-            Err(e) => panic!("{}", e),
-            Ok(e) => e,
-        }
-    };
-}
-
-pub(super) struct Listener {
-    listener: UnixListener,
+pub enum Listener {
+    Tcp(super::transport_tcp::Listener),
+    Unix(super::transport_unix::Listener),
 }
 
 impl Listener {
-    pub fn new() -> Self {
-        let path = "./_socket";
-        remove_file_if_exists(&path).expect("Failed to bind.");
-        let listener = UnixListener::bind(&path).expect("Failed to bind.");
-        Self { listener }
+    pub fn new(addr: Address) -> Self {
+        match addr {
+            Address::Tcp(x) => Listener::Tcp(super::transport_tcp::Listener::new(x)),
+            Address::Unix(x) => Listener::Unix(super::transport_unix::Listener::new(x)),
+        }
     }
     pub fn accept(&mut self) -> Socket {
-        let (stream, _) = self.listener.accept().expect("Failed to listen.");
-        Socket {
-            stream: Some(stream),
+        match self {
+            Listener::Tcp(x) => Socket::Tcp(x.accept()),
+            Listener::Unix(x) => Socket::Unix(x.accept()),
         }
     }
 }
 
-pub(super) struct Socket {
-    stream: Option<UnixStream>,
+pub enum Socket {
+    Tcp(super::transport_tcp::Socket),
+    Unix(super::transport_unix::Socket),
 }
 
 impl Socket {
-    pub fn new() -> Self {
-        let path = "./pg_vectors/_socket";
-        let stream = UnixStream::connect(path).expect("Failed to bind.");
-        Socket {
-            stream: Some(stream),
+    pub fn new(addr: Address) -> Self {
+        match addr {
+            Address::Tcp(x) => Socket::Tcp(super::transport_tcp::Socket::new(x)),
+            Address::Unix(x) => Socket::Unix(super::transport_unix::Socket::new(x)),
         }
     }
     pub fn server_send<T>(&mut self, packet: T) -> Result<(), ServerIpcError>
     where
         T: Serialize,
     {
-        use byteorder::NativeEndian as N;
-        let stream = self.stream.as_mut().ok_or(ServerIpcError::Closed)?;
-        let buffer = bincode::serialize(&packet).expect("Failed to serialize");
-        let len = u32::try_from(buffer.len()).expect("Packet is too large.");
-        resolve_server_closed!(stream.write_u32::<N>(len));
-        resolve_server_closed!(stream.write_all(&buffer));
-        Ok(())
+        match self {
+            Socket::Tcp(x) => x.server_send(packet),
+            Socket::Unix(x) => x.server_send(packet),
+        }
     }
     pub fn client_recv<T>(&mut self) -> Result<T, ClientIpcError>
     where
         T: for<'a> Deserialize<'a>,
     {
-        use byteorder::NativeEndian as N;
-        let stream = self.stream.as_mut().ok_or(ClientIpcError::Closed)?;
-        let len = resolve_client_closed!(stream.read_u32::<N>());
-        let mut buffer = vec![0u8; len as usize];
-        resolve_client_closed!(stream.read_exact(&mut buffer));
-        let packet = bincode::deserialize(&buffer).expect("Failed to deserialize.");
-        Ok(packet)
+        match self {
+            Socket::Tcp(x) => x.client_recv(),
+            Socket::Unix(x) => x.client_recv(),
+        }
     }
     pub fn client_send<T>(&mut self, packet: T) -> Result<(), ClientIpcError>
     where
         T: Serialize,
     {
-        use byteorder::NativeEndian as N;
-        let stream = self.stream.as_mut().ok_or(ClientIpcError::Closed)?;
-        let buffer = bincode::serialize(&packet).expect("Failed to serialize");
-        let len = u32::try_from(buffer.len()).expect("Packet is too large.");
-        resolve_client_closed!(stream.write_u32::<N>(len));
-        resolve_client_closed!(stream.write_all(&buffer));
-        Ok(())
+        match self {
+            Socket::Tcp(x) => x.client_send(packet),
+            Socket::Unix(x) => x.client_send(packet),
+        }
     }
     pub fn server_recv<T>(&mut self) -> Result<T, ServerIpcError>
     where
         T: for<'a> Deserialize<'a>,
     {
-        use byteorder::NativeEndian as N;
-        let stream = self.stream.as_mut().ok_or(ServerIpcError::Closed)?;
-        let len = resolve_server_closed!(stream.read_u32::<N>());
-        let mut buffer = vec![0u8; len as usize];
-        resolve_server_closed!(stream.read_exact(&mut buffer));
-        let packet = bincode::deserialize(&buffer).expect("Failed to deserialize.");
-        Ok(packet)
-    }
-}
-
-fn remove_file_if_exists(path: impl AsRef<Path>) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+        match self {
+            Socket::Tcp(x) => x.server_recv(),
+            Socket::Unix(x) => x.server_recv(),
+        }
     }
 }

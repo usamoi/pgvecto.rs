@@ -26,6 +26,8 @@ if [ "$OS" == "macos-latest" ]; then
     echo "$(brew --prefix postgresql@$VERSION)/bin" >> $GITHUB_PATH
     brew services start postgresql@$VERSION
     sleep 30
+    ls /var/log
+    cat /var/log/postgresql@$VERSION.log
     createdb
 fi
 

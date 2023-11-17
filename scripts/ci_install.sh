@@ -10,4 +10,7 @@ if [ "$OS" == "ubuntu-latest" ]; then
 fi
 if [ "$OS" == "macos-latest" ]; then
     brew services restart postgresql@$VERSION
+    sleep 30
+    ls /var/log
+    cat /var/log/postgresql@$VERSION.log
 fi

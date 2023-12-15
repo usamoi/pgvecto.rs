@@ -2038,7 +2038,7 @@ dependencies = [
 [[package]]
 name = "pgrx"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "atomic-traits",
  "bitflags 2.4.1",
@@ -2062,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "pgrx-macros"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "pgrx-sql-entity-graph",
  "proc-macro2",
@@ -2073,7 +2073,7 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-config"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "cargo_toml",
  "dirs",
@@ -2090,7 +2090,7 @@ dependencies = [
 [[package]]
 name = "pgrx-pg-sys"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "bindgen",
  "clang-sys",
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "pgrx-sql-entity-graph"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "convert_case",
  "eyre",
@@ -2127,7 +2127,7 @@ dependencies = [
 [[package]]
 name = "pgrx-tests"
 version = "0.11.0"
-source = "git+https://github.com/tensorchord/pgrx.git?rev=7c30e2023876c1efce613756f5ec81f3ab05696b#7c30e2023876c1efce613756f5ec81f3ab05696b"
+source = "git+https://github.com/tensorchord/pgrx.git?branch=develop#3e70e63dae5f031627cb3d59d47fab070fb78e92"
 dependencies = [
  "clap-cargo",
  "eyre",

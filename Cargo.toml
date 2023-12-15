@@ -28,13 +28,13 @@ bincode.workspace = true
 half.workspace = true
 num-traits.workspace = true
 service = { path = "crates/service" }
-pgrx = { git = "https://github.com/tensorchord/pgrx.git", branch = "develop", default-features = false }
+pgrx = { git = "https://github.com/tensorchord/pgrx.git", rev = "3e70e63dae5f031627cb3d59d47fab070fb78e92", default-features = false }
 openai_api_rust = { git = "https://github.com/tensorchord/openai-api.git", rev = "228d54b6002e98257b3c81501a054942342f585f" }
 env_logger = "0.10.0"
 toml = "0.8.8"
 
 [dev-dependencies]
-pgrx-tests = { git = "https://github.com/tensorchord/pgrx.git", branch = "develop" }
+pgrx-tests = { git = "https://github.com/tensorchord/pgrx.git", rev = "3e70e63dae5f031627cb3d59d47fab070fb78e92" }
 httpmock = "0.6"
 mockall = "0.11.4"
 

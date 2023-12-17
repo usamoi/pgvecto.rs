@@ -5,7 +5,7 @@ use crate::gucs::OPENAI_API_KEY_GUC;
 use pgrx::prelude::*;
 use service::prelude::F32;
 
-#[pg_extern]
+#[pgrx::pg_extern(volatile, strict)]
 fn ai_embedding_vector(input: String) -> Vecf32Output {
     let api_key = match OPENAI_API_KEY_GUC.get() {
         Some(key) => key

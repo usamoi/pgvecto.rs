@@ -22,18 +22,27 @@ use std::ptr::NonNull;
 pgrx::extension_sql!(
     r#"
 CREATE TYPE vector (
-    INPUT     = vecf32_in,
-    OUTPUT    = vecf32_out,
-    TYPMOD_IN = typmod_in,
-    TYPMOD_OUT = typmod_out,
-    STORAGE   = EXTENDED,
+    INPUT          = vecf32_in,
+    OUTPUT         = vecf32_out,
+    RECEIVE        = vecf32_recv,
+    SEND           = vecf32_send,
+    TYPMOD_IN      = typmod_in,
+    TYPMOD_OUT     = typmod_out,
     INTERNALLENGTH = VARIABLE,
-    ALIGNMENT = double
+    ALIGNMENT      = double,
+    STORAGE        = EXTENDED
 );
 "#,
     name = "vecf32",
     creates = [Type(Vecf32)],
-    requires = [vecf32_in, vecf32_out, typmod_in, typmod_out],
+    requires = [
+        vecf32_in,
+        vecf32_out,
+        vecf32_recv,
+        vecf32_send,
+        typmod_in,
+        typmod_out
+    ],
 );
 
 #[repr(C, align(8))]
@@ -340,4 +349,45 @@ fn vecf32_out(vector: Vecf32Input<'_>) -> CString {
     }
     buffer.push(']');
     CString::new(buffer).unwrap()
+}
+
+#[pgrx::pg_extern(immutable, parallel_safe, strict)]
+fn vecf32_recv(internal: pgrx::Internal) -> Vecf32Output {
+    unsafe {
+        let buf = internal.get_mut::<pgrx::pg_sys::StringInfoData>().unwrap();
+        let mut header = std::mem::zeroed::<Vecf32>();
+        pgrx::pg_sys::pq_copymsgbytes(
+            buf,
+            std::ptr::addr_of_mut!(header).cast(),
+            std::mem::size_of::<Vecf32>() as _,
+        );
+        assert!(header.varlena & 3 == 0);
+        assert!(header.kind == 0);
+        assert!(header.reserved == 0);
+        assert!(header.len != 0);
+        let len = header.len;
+        let layout = Vecf32::layout(len as _);
+        assert_eq!(header.varlena >> 2, layout.size() as u32);
+        let ptr = pgrx::pg_sys::palloc(layout.size()) as *mut Vecf32;
+        ptr.cast::<u8>().add(layout.size() - 8).write_bytes(0, 8);
+        std::ptr::addr_of_mut!((*ptr).varlena).write(Vecf32::varlena(layout.size()));
+        std::ptr::addr_of_mut!((*ptr).kind).write(0);
+        std::ptr::addr_of_mut!((*ptr).reserved).write(0);
+        std::ptr::addr_of_mut!((*ptr).len).write(len);
+        pgrx::pg_sys::pq_copymsgbytes(
+            buf,
+            (*ptr).phantom.as_mut_ptr().cast(),
+            (std::mem::size_of::<F32>() * (len as usize)) as i32,
+        );
+        Vecf32Output(NonNull::new(ptr).unwrap())
+    }
+}
+
+#[pgrx::pg_extern(immutable, parallel_safe, strict)]
+fn vecf32_send(vector: Vecf32Input<'_>) -> Vec<u8> {
+    unsafe {
+        let layout = Vecf32::layout(vector.len());
+        let slice = std::slice::from_raw_parts(vector.deref().as_ptr().cast::<u8>(), layout.size());
+        slice.to_vec()
+    }
 }

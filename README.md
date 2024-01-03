@@ -41,6 +41,7 @@ More details at [./docs/comparison-pgvector.md](./docs/comparison-pgvector.md)
 - [Searching](./docs/searching.md)
 - [Comparison with pgvector](./docs/comparison-pgvector.md)
 - [Why not a specialty vector database?](./docs/comparison-with-specialized-vectordb.md)
+- [Development](./docs/development.md)
 
 For users, we recommend you to try pgvecto.rs using our pre-built docker image, by running
 

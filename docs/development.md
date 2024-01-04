@@ -20,6 +20,7 @@ sudo apt install -y \
     bison \
     build-essential \
     ccache \
+    curl \
     flex \
     gcc \
     git \
@@ -32,6 +33,7 @@ sudo apt install -y \
     lsb-release \
     pkg-config \
     tzdata \
+    wget \
     xsltproc \
     zlib1g-dev
 ```
@@ -65,6 +67,7 @@ sudo apt-get install -y --no-install-recommends clang-16
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
 ```
 
 6. Install cargo-pgrx.

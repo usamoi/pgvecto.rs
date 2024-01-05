@@ -9,6 +9,7 @@ def build():
             'bison',
             'build-essential',
             'ccache',
+            'curl',
             'flex',
             'gcc',
             'git',
@@ -21,6 +22,7 @@ def build():
             'lsb-release',
             'pkg-config',
             'tzdata',
+            'wget',
             'xsltproc',
             'zlib1g-dev'
         ]

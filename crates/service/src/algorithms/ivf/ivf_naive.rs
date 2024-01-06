@@ -62,7 +62,13 @@ impl<S: G> IvfNaive<S> {
         opts: &SearchOptions,
         filter: &mut impl Filter,
     ) -> Heap {
-        search(&self.mmap, vector, opts.search_k, opts.ivf_nprobe, filter)
+        search(
+            &self.mmap,
+            vector,
+            opts.search_maximum,
+            opts.ivf_nprobe,
+            filter,
+        )
     }
 
     pub fn vbase<'a>(

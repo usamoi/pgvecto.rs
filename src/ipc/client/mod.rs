@@ -1,6 +1,6 @@
 use super::packet::*;
 use super::transport::ClientSocket;
-use crate::gucs::{Transport, TRANSPORT};
+use crate::gucs::internal::{Transport, INTERNAL_TRANSPORT};
 use crate::utils::cells::PgRefCell;
 use service::index::IndexOptions;
 use service::index::IndexStat;
@@ -204,7 +204,7 @@ pub fn borrow_mut() -> ClientGuard<Rpc> {
             panic!("borrowed when borrowed");
         }
         Status::Lost => {
-            let socket = match TRANSPORT.get() {
+            let socket = match INTERNAL_TRANSPORT.get() {
                 Transport::unix => crate::ipc::connect_unix(),
                 Transport::mmap => crate::ipc::connect_mmap(),
             };

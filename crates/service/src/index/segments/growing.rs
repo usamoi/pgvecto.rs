@@ -179,7 +179,7 @@ impl<S: G> GrowingSegment<S> {
         filter: &mut impl Filter,
     ) -> Heap {
         let n = self.len.load(Ordering::Acquire);
-        let mut heap = Heap::new(opts.search_k);
+        let mut heap = Heap::new(opts.search_maximum);
         for i in 0..n {
             let log = unsafe { (*self.vec[i].get()).assume_init_ref() };
             let distance = S::distance(vector, &log.vector);

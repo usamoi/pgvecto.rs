@@ -78,6 +78,10 @@ The extension is upgraded so this index is outdated.
 ADVICE: Rebuild the index. Please read `https://docs.pgvecto.rs/admin/upgrading.html`.\
 ")]
     Upgrade2,
+    #[error("\
+Planning failed.\
+")]
+    Planning,
 }
 
 pub trait FriendlyErrorLike: Sized {

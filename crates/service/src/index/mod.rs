@@ -64,9 +64,9 @@ pub struct IndexOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct SearchOptions {
     #[validate(range(min = 1, max = 65535))]
-    pub search_k: usize,
+    pub search_maximum: usize,
     #[validate(range(min = 1, max = 65535))]
-    pub vbase_range: usize,
+    pub hnsw_ef: usize,
     #[validate(range(min = 1, max = 1_000_000))]
     pub ivf_nprobe: u32,
 }
@@ -343,7 +343,7 @@ impl<S: G> IndexView<S> {
             }
         };
         let n = self.sealed.len() + self.growing.len() + 1;
-        let mut result = Heap::new(opts.search_k);
+        let mut result = Heap::new(opts.search_maximum);
         let mut heaps = BinaryHeap::with_capacity(1 + n);
         for (_, sealed) in self.sealed.iter() {
             let p = sealed

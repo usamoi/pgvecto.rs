@@ -59,7 +59,7 @@ impl<S: G> AbstractIndexing<S> for FlatIndexing<S> {
     }
 
     fn search(&self, vector: &[S::Scalar], opts: &SearchOptions, filter: &mut impl Filter) -> Heap {
-        self.raw.search(vector, opts.search_k, filter)
+        self.raw.search(vector, opts.search_maximum, filter)
     }
 
     fn vbase<'a>(

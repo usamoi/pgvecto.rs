@@ -1,8 +1,6 @@
+use crate::gucs::planning::*;
+use crate::gucs::searching::*;
 use crate::gucs::ENABLE_PREFILTER;
-use crate::gucs::ENABLE_VBASE;
-use crate::gucs::IVF_NPROBE;
-use crate::gucs::K;
-use crate::gucs::VBASE_RANGE;
 use crate::index::utils::from_datum;
 use crate::ipc::client::ClientGuard;
 use crate::ipc::client::Vbase;
@@ -100,13 +98,13 @@ pub unsafe fn next_scan(scan: pgrx::pg_sys::IndexScanDesc) -> bool {
 
         if ENABLE_VBASE.get() {
             let opts = SearchOptions {
-                search_k: K.get() as _,
-                vbase_range: VBASE_RANGE.get() as _,
+                search_maximum: SEARCH_MAXIMUM.get() as _,
+                hnsw_ef: HNSW_EF.get() as _,
                 ivf_nprobe: IVF_NPROBE.get() as _,
             };
             let vbase = rpc.vbase(id, vector.clone(), opts);
             *scanner = Scanner::Vbase { node, vbase };
-        } else {
+        } else if ENABLE_SEARCH.get() {
             struct Search {
                 node: *mut pgrx::pg_sys::IndexScanState,
             }
@@ -119,14 +117,16 @@ pub unsafe fn next_scan(scan: pgrx::pg_sys::IndexScanDesc) -> bool {
 
             let search = Search { node };
             let opts = SearchOptions {
-                search_k: K.get() as _,
-                vbase_range: VBASE_RANGE.get() as _,
+                search_maximum: SEARCH_MAXIMUM.get() as _,
+                hnsw_ef: HNSW_EF.get() as _,
                 ivf_nprobe: IVF_NPROBE.get() as _,
             };
 
             let mut data = rpc.search(id, vector.clone(), ENABLE_PREFILTER.get(), opts, search);
             data.reverse();
             *scanner = Scanner::Search { node, data };
+        } else {
+            FriendlyError::Planning.friendly();
         }
     }
     match scanner {

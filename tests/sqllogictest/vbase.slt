@@ -15,6 +15,9 @@ statement ok
 INSERT INTO t (val) VALUES ('[0.6,0.6,0.6]');
 
 statement ok
+SET vectors.enable_search=off;
+
+statement ok
 SET vectors.enable_vbase=on;
 
 query I

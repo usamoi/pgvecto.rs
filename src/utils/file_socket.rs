@@ -32,8 +32,8 @@ impl FileSocket {
 
 fn send_fd(tx: BorrowedFd<'_>, fd: BorrowedFd<'_>) -> std::io::Result<()> {
     let fds = [fd];
-    let mut buffer = vec![0u8; 128];
-    let mut control = SendAncillaryBuffer::new(&mut buffer);
+    let mut buffer = AncillaryBuffer([0u8; rustix::cmsg_space!(ScmRights(1))]);
+    let mut control = SendAncillaryBuffer::new(&mut buffer.0);
     control.push(SendAncillaryMessage::ScmRights(&fds));
     let ios = IoSlice::new(&[b'$']);
     rustix::net::sendmsg(tx, &[ios], &mut control, SendFlags::empty())?;
@@ -41,8 +41,8 @@ fn send_fd(tx: BorrowedFd<'_>, fd: BorrowedFd<'_>) -> std::io::Result<()> {
 }
 
 fn recv_fd(rx: BorrowedFd<'_>) -> std::io::Result<OwnedFd> {
-    let mut buffer = vec![0u8; 128];
-    let mut control = RecvAncillaryBuffer::new(&mut buffer);
+    let mut buffer = AncillaryBuffer([0u8; rustix::cmsg_space!(ScmRights(1))]);
+    let mut control = RecvAncillaryBuffer::new(&mut buffer.0);
     let mut buffer_ios = [b'.'];
     let ios = IoSliceMut::new(&mut buffer_ios);
     rustix::net::recvmsg(rx, &mut [ios], &mut control, RecvFlags::empty())?;
@@ -59,3 +59,6 @@ fn recv_fd(rx: BorrowedFd<'_>) -> std::io::Result<OwnedFd> {
     assert!(fds.len() == 1);
     Ok(fds.pop().unwrap())
 }
+
+#[repr(C, align(32))]
+struct AncillaryBuffer([u8; rustix::cmsg_space!(ScmRights(1))]);

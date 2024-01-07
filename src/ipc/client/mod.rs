@@ -11,8 +11,6 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 
 pub trait ClientLike: 'static {
-    const RESET: bool = false;
-
     fn from_socket(socket: ClientSocket) -> Self;
     fn to_socket(self) -> ClientSocket;
 }
@@ -142,8 +140,6 @@ impl ClientGuard<Rpc> {
 }
 
 impl ClientLike for Rpc {
-    const RESET: bool = true;
-
     fn from_socket(socket: ClientSocket) -> Self {
         Self { socket }
     }
@@ -196,7 +192,7 @@ impl ClientLike for Vbase {
 enum Status {
     Borrowed,
     Lost,
-    Reset(ClientSocket),
+    Reuse(ClientSocket),
 }
 
 static CLIENT: PgRefCell<Status> = unsafe { PgRefCell::new(Status::Lost) };
@@ -215,8 +211,8 @@ pub fn borrow_mut() -> ClientGuard<Rpc> {
             *x = Status::Borrowed;
             ClientGuard::new(Rpc::new(socket))
         }
-        x @ Status::Reset(_) => {
-            let Status::Reset(socket) = std::mem::replace(x, Status::Borrowed) else {
+        x @ Status::Reuse(_) => {
+            let Status::Reuse(socket) = std::mem::replace(x, Status::Borrowed) else {
                 unreachable!()
             };
             ClientGuard::new(Rpc::new(socket))
@@ -236,14 +232,16 @@ impl<T: ClientLike> Drop for ClientGuard<T> {
         match *x {
             Status::Borrowed => {
                 let socket = unsafe { ManuallyDrop::take(&mut self.0).to_socket() };
-                if T::RESET && socket.test() {
-                    *x = Status::Reset(socket);
+                if !std::thread::panicking()
+                    && std::any::TypeId::of::<T>() == std::any::TypeId::of::<Rpc>()
+                {
+                    *x = Status::Reuse(socket);
                 } else {
                     *x = Status::Lost;
                 }
             }
             Status::Lost => unreachable!(),
-            Status::Reset(_) => unreachable!(),
+            Status::Reuse(_) => unreachable!(),
         }
     }
 }

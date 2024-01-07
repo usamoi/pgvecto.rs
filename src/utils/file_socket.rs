@@ -41,23 +41,27 @@ fn send_fd(tx: BorrowedFd<'_>, fd: BorrowedFd<'_>) -> std::io::Result<()> {
 }
 
 fn recv_fd(rx: BorrowedFd<'_>) -> std::io::Result<OwnedFd> {
-    let mut buffer = AncillaryBuffer([0u8; rustix::cmsg_space!(ScmRights(1))]);
-    let mut control = RecvAncillaryBuffer::new(&mut buffer.0);
-    let mut buffer_ios = [b'.'];
-    let ios = IoSliceMut::new(&mut buffer_ios);
-    rustix::net::recvmsg(rx, &mut [ios], &mut control, RecvFlags::empty())?;
-    assert!(buffer_ios[0] == b'$');
-    let mut fds = vec![];
-    for message in control.drain() {
-        match message {
-            RecvAncillaryMessage::ScmRights(iter) => {
-                fds.extend(iter);
+    loop {
+        let mut buffer = AncillaryBuffer([0u8; rustix::cmsg_space!(ScmRights(1))]);
+        let mut control = RecvAncillaryBuffer::new(&mut buffer.0);
+        let mut buffer_ios = [b'.'];
+        let ios = IoSliceMut::new(&mut buffer_ios);
+        rustix::net::recvmsg(rx, &mut [ios], &mut control, RecvFlags::empty())?;
+        assert!(buffer_ios[0] == b'$' || buffer_ios[0] == b'.');
+        let mut fds = vec![];
+        for message in control.drain() {
+            match message {
+                RecvAncillaryMessage::ScmRights(iter) => {
+                    fds.extend(iter);
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
+        }
+        assert!(fds.len() <= 1);
+        if let Some(fd) = fds.pop() {
+            return Ok(fd);
         }
     }
-    assert!(fds.len() == 1);
-    Ok(fds.pop().unwrap())
 }
 
 #[repr(C, align(32))]

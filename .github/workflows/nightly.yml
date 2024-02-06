@@ -1,0 +1,34 @@
+name: Nightly
+
+on:
+  schedule:
+    # 00:00 UTC+8 -> 16:00
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - run: |
+          SEMVER=$(TZ='Asia/Shanghai' date +"0.0.0-nightly.%Y%m%d")
+          USERNAME=$(gh repo view --json owner --jq .owner.login)
+          git remote add $USERNAME https://github.com/$USERNAME/pgvecto.rs.git
+          git fetch $USERNAME main
+          git reset --hard $USERNAME/main
+          git push origin --force
+          COMMIT_DATE=$(git log -1 --since="24 hours ago" --pretty=format:"%cI")
+          if [[ -n "$COMMIT_DATE" ]]; then
+            gh release create v$SEMVER --generate-notes --prerelease --target main
+            gh workflow run release.yml -r v$SEMVER -f version=$SEMVER
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

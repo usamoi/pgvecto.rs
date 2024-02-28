@@ -1,12 +1,10 @@
-use super::quantization::Quantization;
-use super::raw::Raw;
+use super::raw::{ArcRaw, Raw};
 use crate::index::segments::growing::GrowingSegment;
 use crate::index::segments::sealed::SealedSegment;
 use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
+use quantization::Quantization;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fs::create_dir;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,10 +19,10 @@ impl<S: G> Flat<S> {
         sealed: Vec<Arc<SealedSegment<S>>>,
         growing: Vec<Arc<GrowingSegment<S>>>,
     ) -> Self {
-        create_dir(path).unwrap();
+        std::fs::create_dir(path).unwrap();
         let ram = make(path, sealed, growing, options);
         let mmap = save(path, ram);
-        sync_dir(path);
+        crate::utils::dir_ops::sync_dir(path);
         Self { mmap }
     }
 
@@ -69,12 +67,12 @@ unsafe impl<S: G> Sync for Flat<S> {}
 
 pub struct FlatRam<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
 }
 
 pub struct FlatMmap<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
 }
 
 unsafe impl<S: G> Send for FlatMmap<S> {}
@@ -97,7 +95,7 @@ pub fn make<S: G>(
         &path.join("quantization"),
         options.clone(),
         idx_opts.quantization,
-        &raw,
+        &ArcRaw(raw.clone()),
         (0..raw.len()).collect::<Vec<_>>(),
     );
     FlatRam { raw, quantization }
@@ -117,7 +115,7 @@ pub fn open<S: G>(path: &Path, options: IndexOptions) -> FlatMmap<S> {
         &path.join("quantization"),
         options.clone(),
         idx_opts.quantization,
-        &raw,
+        &ArcRaw(raw.clone()),
     );
     FlatMmap { raw, quantization }
 }

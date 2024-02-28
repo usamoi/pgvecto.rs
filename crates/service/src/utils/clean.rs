@@ -19,3 +19,23 @@ pub fn clean(path: impl AsRef<Path>, wanted: impl Iterator<Item = String>) {
         }
     }
 }
+
+pub fn clean_prefix(path: &Path, prefix: &str, wanted: impl Iterator<Item = String>) {
+    let dirs = std::fs::read_dir(path)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let wanted = HashSet::<String>::from_iter(wanted);
+    for dir in dirs {
+        let filename = dir.file_name();
+        let filename = filename.to_str().unwrap();
+        if let Some(r) = filename.strip_prefix(prefix) {
+            if !wanted.contains(r) {
+                log::info!("Delete outdated directory {:?}.", path.join(filename));
+                std::fs::remove_dir_all(path.join(filename)).unwrap();
+            } else {
+                log::info!("Find directory {:?}.", path.join(filename));
+            }
+        }
+    }
+}

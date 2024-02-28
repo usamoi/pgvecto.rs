@@ -1,45 +1,43 @@
+#![feature(avx512_target_feature)]
+#![allow(clippy::len_without_is_empty)]
+
+pub mod global;
+
 pub mod product;
 pub mod scalar;
 pub mod trivial;
 
+use self::global::GlobalQuantization;
 use self::product::ProductQuantization;
 use self::scalar::ScalarQuantization;
 use self::trivial::TrivialQuantization;
-use super::raw::Raw;
-use crate::prelude::*;
+
+pub use base::global::*;
+pub use base::index::*;
+pub use base::scalar::*;
+pub use base::search::*;
 use std::path::Path;
-use std::sync::Arc;
 
-pub trait Quan<S: G> {
-    fn create(
-        path: &Path,
-        options: IndexOptions,
-        quantization_options: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
-        permutation: Vec<u32>,
-    ) -> Self;
-    fn open2(
-        path: &Path,
-        options: IndexOptions,
-        quantization_options: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
-    ) -> Self;
-    fn distance(&self, lhs: Borrowed<'_, S>, rhs: u32) -> F32;
-    fn distance2(&self, lhs: u32, rhs: u32) -> F32;
+pub trait QuantizationInput<S: GlobalQuantization>: Clone {
+    fn len(&self) -> u32;
+
+    fn vector(&self, i: u32) -> Borrowed<'_, S>;
+
+    fn payload(&self, i: u32) -> Payload;
 }
 
-pub enum Quantization<S: G> {
-    Trivial(TrivialQuantization<S>),
-    Scalar(ScalarQuantization<S>),
-    Product(ProductQuantization<S>),
+pub enum Quantization<S: GlobalQuantization, I: QuantizationInput<S>> {
+    Trivial(TrivialQuantization<S, I>),
+    Scalar(ScalarQuantization<S, I>),
+    Product(ProductQuantization<S, I>),
 }
 
-impl<S: G> Quantization<S> {
+impl<S: GlobalQuantization, I: QuantizationInput<S>> Quantization<S, I> {
     pub fn create(
         path: &Path,
         options: IndexOptions,
         quantization_options: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
+        raw: &I,
         permutation: Vec<u32>, // permutation is the mapping from placements to original ids
     ) -> Self {
         match quantization_options {
@@ -71,22 +69,22 @@ impl<S: G> Quantization<S> {
         path: &Path,
         options: IndexOptions,
         quantization_options: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
+        raw: &I,
     ) -> Self {
         match quantization_options {
-            QuantizationOptions::Trivial(_) => Self::Trivial(TrivialQuantization::open2(
+            QuantizationOptions::Trivial(_) => Self::Trivial(TrivialQuantization::open(
                 path,
                 options,
                 quantization_options,
                 raw,
             )),
-            QuantizationOptions::Scalar(_) => Self::Scalar(ScalarQuantization::open2(
+            QuantizationOptions::Scalar(_) => Self::Scalar(ScalarQuantization::open(
                 path,
                 options,
                 quantization_options,
                 raw,
             )),
-            QuantizationOptions::Product(_) => Self::Product(ProductQuantization::open2(
+            QuantizationOptions::Product(_) => Self::Product(ProductQuantization::open(
                 path,
                 options,
                 quantization_options,

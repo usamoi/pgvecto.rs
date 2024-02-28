@@ -5,7 +5,7 @@ use crate::index::IndexView;
 use crate::index::OutdatedError;
 use crate::prelude::*;
 use base::worker::*;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -23,56 +23,56 @@ pub enum Instance {
 }
 
 impl Instance {
-    pub fn create(path: PathBuf, options: IndexOptions) -> Result<Self, CreateError> {
+    pub fn create(path: &Path, options: IndexOptions) -> Result<Self, CreateError> {
         match (options.vector.d, options.vector.v) {
             (DistanceKind::Cos, VectorKind::Vecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf32Cos(index))
             }
             (DistanceKind::Dot, VectorKind::Vecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf32Dot(index))
             }
             (DistanceKind::L2, VectorKind::Vecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf32L2(index))
             }
             (DistanceKind::Cos, VectorKind::Vecf16) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf16Cos(index))
             }
             (DistanceKind::Dot, VectorKind::Vecf16) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf16Dot(index))
             }
             (DistanceKind::L2, VectorKind::Vecf16) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::Vecf16L2(index))
             }
             (DistanceKind::L2, VectorKind::SVecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::SVecf32L2(index))
             }
             (DistanceKind::Cos, VectorKind::SVecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::SVecf32Cos(index))
             }
             (DistanceKind::Dot, VectorKind::SVecf32) => {
-                let index = Index::create(path.clone(), options)?;
+                let index = Index::create(path, options)?;
                 self::metadata::Metadata::write(path.join("metadata"));
                 Ok(Self::SVecf32Dot(index))
             }
         }
     }
-    pub fn open(path: PathBuf) -> Self {
+    pub fn open(path: &Path) -> Self {
         if self::metadata::Metadata::read(path.join("metadata")).is_err() {
             return Self::Upgrade;
         }

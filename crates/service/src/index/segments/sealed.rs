@@ -3,10 +3,10 @@ use super::SegmentTracker;
 use crate::index::indexing::DynamicIndexing;
 use crate::index::{IndexOptions, IndexTracker, SearchOptions, SegmentStat};
 use crate::prelude::*;
-use crate::utils::dir_ops::{dir_size, sync_dir};
+use crate::utils::dir_ops::dir_size;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -19,25 +19,28 @@ pub struct SealedSegment<S: G> {
 impl<S: G> SealedSegment<S> {
     pub fn create(
         _tracker: Arc<IndexTracker>,
-        path: PathBuf,
+        path: &Path,
         uuid: Uuid,
         options: IndexOptions,
         sealed: Vec<Arc<SealedSegment<S>>>,
         growing: Vec<Arc<GrowingSegment<S>>>,
     ) -> Arc<Self> {
-        std::fs::create_dir(&path).unwrap();
+        std::fs::create_dir(path).unwrap();
         let indexing = DynamicIndexing::create(&path.join("indexing"), options, sealed, growing);
-        sync_dir(&path);
+        crate::utils::dir_ops::sync_dir(path);
         Arc::new(Self {
             uuid,
             indexing,
-            _tracker: Arc::new(SegmentTracker { path, _tracker }),
+            _tracker: Arc::new(SegmentTracker {
+                path: path.to_path_buf(),
+                _tracker,
+            }),
         })
     }
 
     pub fn open(
         _tracker: Arc<IndexTracker>,
-        path: PathBuf,
+        path: &Path,
         uuid: Uuid,
         options: IndexOptions,
     ) -> Arc<Self> {
@@ -45,7 +48,10 @@ impl<S: G> SealedSegment<S> {
         Arc::new(Self {
             uuid,
             indexing,
-            _tracker: Arc::new(SegmentTracker { path, _tracker }),
+            _tracker: Arc::new(SegmentTracker {
+                path: path.to_path_buf(),
+                _tracker,
+            }),
         })
     }
 

@@ -2,6 +2,7 @@ use crate::index::segments::growing::GrowingSegment;
 use crate::index::segments::sealed::SealedSegment;
 use crate::prelude::*;
 use crate::storage::Storage;
+use quantization::QuantizationInput;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,6 +23,12 @@ impl<S: G> Raw<S> {
         crate::utils::dir_ops::sync_dir(path);
         Self { mmap }
     }
+
+    pub fn open(path: &Path, options: IndexOptions) -> Self {
+        Self {
+            mmap: S::Storage::open(path, options),
+        }
+    }
 }
 
 impl<S: G> Raw<S> {
@@ -35,12 +42,6 @@ impl<S: G> Raw<S> {
 
     pub fn payload(&self, i: u32) -> Payload {
         self.mmap.payload(i)
-    }
-
-    pub fn open(path: &Path, options: IndexOptions) -> Self {
-        Self {
-            mmap: S::Storage::open(path, options),
-        }
     }
 }
 
@@ -105,5 +106,22 @@ fn make<S: G>(
         sealed,
         growing,
         dims: options.vector.dims,
+    }
+}
+
+#[derive(Clone)]
+pub struct ArcRaw<S: G>(pub Arc<Raw<S>>);
+
+impl<S: G> QuantizationInput<S> for ArcRaw<S> {
+    fn len(&self) -> u32 {
+        Raw::len(&self.0)
+    }
+
+    fn vector(&self, i: u32) -> Borrowed<'_, S> {
+        Raw::vector(&self.0, i)
+    }
+
+    fn payload(&self, i: u32) -> Payload {
+        Raw::payload(&self.0, i)
     }
 }

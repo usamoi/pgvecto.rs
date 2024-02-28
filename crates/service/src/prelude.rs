@@ -10,7 +10,10 @@ pub use num_traits::{Float, Zero};
 use crate::storage::GlobalStorage;
 
 pub trait G:
-    Global + GlobalElkanKMeans + GlobalProductQuantization + GlobalScalarQuantization + GlobalStorage
+    Global
+    + elkan_k_means::global::GlobalElkanKMeans
+    + quantization::global::GlobalQuantization
+    + GlobalStorage
 {
 }
 

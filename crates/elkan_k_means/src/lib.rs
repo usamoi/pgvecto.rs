@@ -1,10 +1,17 @@
-use crate::prelude::*;
-use crate::utils::vec2::Vec2;
+#![allow(clippy::needless_range_loop)]
+
+pub mod global;
+
+use crate::global::GlobalElkanKMeans;
+use base::global::*;
+use base::scalar::*;
+use num_traits::{Float, Zero};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 use std::ops::{Index, IndexMut};
+use utils::vec2::Vec2;
 
 pub struct ElkanKMeans<S: Global> {
     dims: u16,

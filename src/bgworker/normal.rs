@@ -46,9 +46,7 @@ pub fn normal(worker: Arc<Worker>) {
                 libc::sigwait(&set, &mut sig);
             }
             match sig {
-                libc::SIGHUP => {
-                    std::process::exit(0);
-                }
+                libc::SIGHUP => (),
                 libc::SIGTERM => {
                     std::process::exit(0);
                 }

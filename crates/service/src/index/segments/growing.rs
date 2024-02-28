@@ -4,7 +4,6 @@ use crate::index::IndexTracker;
 use crate::index::SearchOptions;
 use crate::index::SegmentStat;
 use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
 use crate::utils::file_wal::FileWal;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -12,7 +11,7 @@ use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::mem::MaybeUninit;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -34,14 +33,14 @@ pub struct GrowingSegment<S: G> {
 impl<S: G> GrowingSegment<S> {
     pub fn create(
         _tracker: Arc<IndexTracker>,
-        path: PathBuf,
+        path: &Path,
         uuid: Uuid,
         options: IndexOptions,
     ) -> Arc<Self> {
-        std::fs::create_dir(&path).unwrap();
+        std::fs::create_dir(path).unwrap();
         let wal = FileWal::create(path.join("wal"));
         let capacity = options.segment.max_growing_segment_size;
-        sync_dir(&path);
+        crate::utils::dir_ops::sync_dir(path);
         Arc::new(Self {
             uuid,
             #[allow(clippy::uninit_vec)]
@@ -56,13 +55,16 @@ impl<S: G> GrowingSegment<S> {
                 inflight: 0,
                 capacity: capacity as usize,
             }),
-            _tracker: Arc::new(SegmentTracker { path, _tracker }),
+            _tracker: Arc::new(SegmentTracker {
+                path: path.to_path_buf(),
+                _tracker,
+            }),
         })
     }
 
     pub fn open(
         _tracker: Arc<IndexTracker>,
-        path: PathBuf,
+        path: &Path,
         uuid: Uuid,
         _: IndexOptions,
     ) -> Arc<Self> {
@@ -83,7 +85,10 @@ impl<S: G> GrowingSegment<S> {
                 inflight: n,
                 capacity: n,
             }),
-            _tracker: Arc::new(SegmentTracker { path, _tracker }),
+            _tracker: Arc::new(SegmentTracker {
+                path: path.to_path_buf(),
+                _tracker,
+            }),
         })
     }
 

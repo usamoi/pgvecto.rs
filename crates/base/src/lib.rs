@@ -7,10 +7,12 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::nonminimal_bool)]
 
+pub mod computation;
 pub mod distance;
 pub mod error;
 pub mod global;
 pub mod index;
+pub mod module;
 pub mod scalar;
 pub mod search;
 pub mod vector;

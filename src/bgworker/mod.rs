@@ -7,7 +7,7 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 pub unsafe fn init() {
     use service::Worker;
     let path = std::path::Path::new("pg_vectors");
-    if !path.try_exists().unwrap() || Worker::check(path.to_owned()) {
+    if !path.try_exists().unwrap() || Worker::check(path) {
         use pgrx::bgworkers::BackgroundWorkerBuilder;
         use pgrx::bgworkers::BgWorkerStartTime;
         use std::time::Duration;
@@ -69,10 +69,10 @@ extern "C" fn _vectors_main(_arg: pgrx::pg_sys::Datum) {
     use std::path::Path;
     let path = Path::new("pg_vectors");
     if path.try_exists().unwrap() {
-        let worker = Worker::open(path.to_owned());
+        let worker = Worker::open(path);
         self::normal::normal(worker);
     } else {
-        let worker = Worker::create(path.to_owned());
+        let worker = Worker::create(path);
         self::normal::normal(worker);
     }
 }

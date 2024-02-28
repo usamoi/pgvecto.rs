@@ -1,22 +1,19 @@
-use crate::algorithms::clustering::elkan_k_means::ElkanKMeans;
-use crate::algorithms::quantization::Quantization;
-use crate::algorithms::raw::Raw;
+use crate::algorithms::raw::{ArcRaw, Raw};
 use crate::index::segments::growing::GrowingSegment;
 use crate::index::segments::sealed::SealedSegment;
 use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
-use crate::utils::element_heap::ElementHeap;
-use crate::utils::mmap_array::MmapArray;
-use crate::utils::vec2::Vec2;
+use elkan_k_means::ElkanKMeans;
+use quantization::Quantization;
 use rand::seq::index::sample;
 use rand::thread_rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator};
 use rayon::prelude::ParallelIterator;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fs::create_dir;
 use std::path::Path;
 use std::sync::Arc;
+use utils::mmap_array::MmapArray;
+use utils::vec2::Vec2;
 
 pub struct IvfNaive<S: G> {
     mmap: IvfMmap<S>,
@@ -29,10 +26,10 @@ impl<S: G> IvfNaive<S> {
         sealed: Vec<Arc<SealedSegment<S>>>,
         growing: Vec<Arc<GrowingSegment<S>>>,
     ) -> Self {
-        create_dir(path).unwrap();
+        std::fs::create_dir(path).unwrap();
         let ram = make(path, sealed, growing, options);
         let mmap = save(ram, path);
-        sync_dir(path);
+        crate::utils::dir_ops::sync_dir(path);
         Self { mmap }
     }
 
@@ -77,7 +74,7 @@ unsafe impl<S: G> Sync for IvfNaive<S> {}
 
 pub struct IvfRam<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
     // ----------------------
     dims: u16,
     // ----------------------
@@ -93,7 +90,7 @@ unsafe impl<S: G> Sync for IvfRam<S> {}
 
 pub struct IvfMmap<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
     // ----------------------
     dims: u16,
     // ----------------------
@@ -180,7 +177,7 @@ pub fn make<S: G>(
         &path.join("quantization"),
         options.clone(),
         quantization_opts,
-        &raw,
+        &ArcRaw(raw.clone()),
         permutation,
     );
     let mut ptr = vec![0usize; nlist as usize + 1];
@@ -224,7 +221,7 @@ pub fn open<S: G>(path: &Path, options: IndexOptions) -> IvfMmap<S> {
         &path.join("quantization"),
         options.clone(),
         options.indexing.clone().unwrap_ivf().quantization,
-        &raw,
+        &ArcRaw(raw.clone()),
     );
     let centroids = MmapArray::open(&path.join("centroids"));
     let ptr = MmapArray::open(&path.join("ptr"));
@@ -249,20 +246,17 @@ pub fn basic<S: G>(
 ) -> BinaryHeap<Reverse<Element>> {
     let mut target = vector.for_own();
     S::elkan_k_means_normalize2(&mut target);
-    let mut lists = ElementHeap::new(nprobe as usize);
+    let mut lists = IndexHeap::new(nprobe as usize);
     for i in 0..mmap.nlist {
         let centroid = mmap.centroids(i);
         let distance = S::elkan_k_means_distance2(target.for_borrow(), centroid);
         if lists.check(distance) {
-            lists.push(Element {
-                distance,
-                payload: i as Payload,
-            });
+            lists.push((distance, i));
         }
     }
     let lists = lists.into_sorted_vec();
     let mut result = BinaryHeap::new();
-    for i in lists.iter().map(|e| e.payload as usize) {
+    for i in lists.iter().map(|e| e.1 as usize) {
         let start = mmap.ptr[i];
         let end = mmap.ptr[i + 1];
         for j in start..end {
@@ -284,20 +278,17 @@ pub fn vbase<'a, S: G>(
 ) -> (Vec<Element>, Box<(dyn Iterator<Item = Element> + 'a)>) {
     let mut target = vector.for_own();
     S::elkan_k_means_normalize2(&mut target);
-    let mut lists = ElementHeap::new(nprobe as usize);
+    let mut lists = IndexHeap::new(nprobe as usize);
     for i in 0..mmap.nlist {
         let centroid = mmap.centroids(i);
         let distance = S::elkan_k_means_distance2(target.for_borrow(), centroid);
         if lists.check(distance) {
-            lists.push(Element {
-                distance,
-                payload: i as Payload,
-            });
+            lists.push((distance, i));
         }
     }
     let lists = lists.into_sorted_vec();
     let mut result = Vec::new();
-    for i in lists.iter().map(|e| e.payload as usize) {
+    for i in lists.iter().map(|e| e.1 as usize) {
         let start = mmap.ptr[i];
         let end = mmap.ptr[i + 1];
         for j in start..end {
@@ -309,4 +300,33 @@ pub fn vbase<'a, S: G>(
         }
     }
     (result, Box::new(std::iter::empty()))
+}
+
+pub struct IndexHeap {
+    binary_heap: BinaryHeap<(F32, u32)>,
+    k: usize,
+}
+
+impl IndexHeap {
+    pub fn new(k: usize) -> Self {
+        assert!(k != 0);
+        Self {
+            binary_heap: BinaryHeap::new(),
+            k,
+        }
+    }
+    pub fn check(&self, distance: F32) -> bool {
+        self.binary_heap.len() < self.k || distance < self.binary_heap.peek().unwrap().0
+    }
+    pub fn push(&mut self, element: (F32, u32)) -> Option<(F32, u32)> {
+        self.binary_heap.push(element);
+        if self.binary_heap.len() == self.k + 1 {
+            self.binary_heap.pop()
+        } else {
+            None
+        }
+    }
+    pub fn into_sorted_vec(self) -> Vec<(F32, u32)> {
+        self.binary_heap.into_sorted_vec()
+    }
 }

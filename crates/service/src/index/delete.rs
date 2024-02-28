@@ -4,16 +4,16 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct Delete {
-    version: DashMap<Pointer, u16>,
+    version: DashMap<Pointer, u64>,
     wal: Mutex<FileWal>,
 }
 
 impl Delete {
-    pub fn create(path: PathBuf) -> Arc<Self> {
+    pub fn create(path: &Path) -> Arc<Self> {
         let wal = FileWal::create(path);
         let version = DashMap::new();
         Arc::new(Self {
@@ -21,9 +21,9 @@ impl Delete {
             wal: wal.into(),
         })
     }
-    pub fn open(path: PathBuf) -> Arc<Self> {
+    pub fn open(path: &Path) -> Arc<Self> {
         let mut wal = FileWal::open(path);
-        let version = DashMap::<Pointer, u16>::new();
+        let version = DashMap::<Pointer, u64>::new();
         while let Some(log) = wal.read() {
             let log = bincode::deserialize::<Log>(&log).unwrap();
             let key = log.key;
@@ -43,10 +43,10 @@ impl Delete {
         })
     }
     pub fn check(&self, payload: Payload) -> Option<Pointer> {
-        let pointer = Pointer::from_u48(payload >> 16);
+        let pointer = payload.pointer();
         match self.version.get(&pointer) {
             Some(e) => {
-                if (payload as u16) == *e {
+                if payload.time() == *e {
                     Some(pointer)
                 } else {
                     None
@@ -69,7 +69,7 @@ impl Delete {
             }
         }
     }
-    pub fn version(&self, key: Pointer) -> u16 {
+    pub fn version(&self, key: Pointer) -> u64 {
         match self.version.get(&key) {
             Some(e) => *e,
             None => 0,

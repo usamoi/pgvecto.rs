@@ -1,13 +1,12 @@
-use super::quantization::Quantization;
-use super::raw::Raw;
+use super::raw::{ArcRaw, Raw};
 use crate::index::segments::growing::GrowingSegment;
 use crate::index::segments::sealed::SealedSegment;
 use crate::prelude::*;
 use crate::utils::dir_ops::sync_dir;
 use crate::utils::element_heap::ElementHeap;
-use crate::utils::mmap_array::MmapArray;
 use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock, RwLockWriteGuard};
+use quantization::Quantization;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -15,6 +14,7 @@ use std::fs::create_dir;
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::Arc;
+use utils::mmap_array::MmapArray;
 
 pub struct Hnsw<S: G> {
     mmap: HnswMmap<S>,
@@ -75,7 +75,7 @@ unsafe impl<S: G> Sync for Hnsw<S> {}
 
 pub struct HnswRam<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
     // ----------------------
     m: u32,
     // ----------------------
@@ -104,7 +104,7 @@ struct HnswRamLayer {
 
 pub struct HnswMmap<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: Quantization<S>,
+    quantization: Quantization<S, ArcRaw<S>>,
     // ----------------------
     m: u32,
     // ----------------------
@@ -146,7 +146,7 @@ pub fn make<S: G>(
         &path.join("quantization"),
         options.clone(),
         quantization_opts,
-        &raw,
+        &ArcRaw(raw.clone()),
         (0..raw.len()).collect::<Vec<_>>(),
     );
     let n = raw.len();
@@ -164,7 +164,7 @@ pub fn make<S: G>(
     let visited = VisitedPool::new(raw.len());
     (0..n).into_par_iter().for_each(|i| {
         fn fast_search<S: G>(
-            quantization: &Quantization<S>,
+            quantization: &Quantization<S, ArcRaw<S>>,
             graph: &HnswRamGraph,
             levels: RangeInclusive<u8>,
             u: u32,
@@ -190,7 +190,7 @@ pub fn make<S: G>(
             u
         }
         fn local_search<S: G>(
-            quantization: &Quantization<S>,
+            quantization: &Quantization<S, ArcRaw<S>>,
             graph: &HnswRamGraph,
             visited: &mut VisitedGuard,
             vector: Borrowed<'_, S>,
@@ -230,7 +230,11 @@ pub fn make<S: G>(
             }
             results.into_sorted_vec()
         }
-        fn select<S: G>(quantization: &Quantization<S>, input: &mut Vec<(F32, u32)>, size: u32) {
+        fn select<S: G>(
+            quantization: &Quantization<S, ArcRaw<S>>,
+            input: &mut Vec<(F32, u32)>,
+            size: u32,
+        ) {
             if input.len() <= size as usize {
                 return;
             }
@@ -372,7 +376,7 @@ pub fn open<S: G>(path: &Path, options: IndexOptions) -> HnswMmap<S> {
         &path.join("quantization"),
         options.clone(),
         idx_opts.quantization,
-        &raw,
+        &ArcRaw(raw.clone()),
     );
     let edges = MmapArray::open(&path.join("edges"));
     let by_layer_id = MmapArray::open(&path.join("by_layer_id"));

@@ -137,10 +137,7 @@ fn merge<S: G>(index: &Arc<Index<S>>, segs: &[Seg<S>]) -> Arc<SealedSegment<S>> 
     let sealed_segment_uuid = Uuid::new_v4();
     SealedSegment::create(
         index._tracker.clone(),
-        index
-            .path
-            .join("segments")
-            .join(sealed_segment_uuid.to_string()),
+        &index.path.join(format!("segments_{}", sealed_segment_uuid)),
         sealed_segment_uuid,
         index.options.clone(),
         sealed,

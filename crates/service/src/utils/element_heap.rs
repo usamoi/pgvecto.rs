@@ -28,7 +28,4 @@ impl ElementHeap {
     pub fn into_reversed_heap(self) -> BinaryHeap<Reverse<Element>> {
         self.binary_heap.into_iter().map(Reverse).collect()
     }
-    pub fn into_sorted_vec(self) -> Vec<Element> {
-        self.binary_heap.into_sorted_vec()
-    }
 }

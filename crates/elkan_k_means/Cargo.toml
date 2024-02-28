@@ -1,0 +1,15 @@
+[package]
+name = "elkan_k_means"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base = { path = "../base" }
+utils = { path = "../utils" }
+bytemuck.workspace = true
+num-traits = "0.2.18"
+rand.workspace = true
+rayon.workspace = true
+
+[lints]
+workspace = true

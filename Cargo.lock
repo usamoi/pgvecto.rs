@@ -869,6 +869,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11157ac094ffbdde99aa67b23417ebdd801842852b500e395a45a9c0aac03e4a"
 
 [[package]]
+name = "elkan_k_means"
+version = "0.0.0"
+dependencies = [
+ "base",
+ "bytemuck",
+ "num-traits",
+ "rand",
+ "rayon",
+ "utils",
+]
+
+[[package]]
 name = "embedding"
 version = "0.0.0"
 dependencies = [
@@ -2200,6 +2212,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "quantization"
+version = "0.0.0"
+dependencies = [
+ "base",
+ "bytemuck",
+ "elkan_k_means",
+ "multiversion",
+ "num-traits",
+ "rand",
+ "rayon",
+ "serde_json",
+ "utils",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2666,16 +2693,19 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "dashmap",
+ "elkan_k_means",
  "log",
  "memmap2",
  "num-traits",
  "parking_lot",
+ "quantization",
  "rand",
  "rayon",
  "rustix 0.38.31",
  "serde",
  "serde_json",
  "thiserror",
+ "utils",
  "uuid",
  "validator",
 ]
@@ -3188,6 +3218,15 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "utils"
+version = "0.0.0"
+dependencies = [
+ "base",
+ "bytemuck",
+ "memmap2",
+]
 
 [[package]]
 name = "uuid"

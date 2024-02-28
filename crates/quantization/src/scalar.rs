@@ -1,36 +1,36 @@
-use crate::algorithms::quantization::Quan;
-use crate::algorithms::quantization::QuantizationOptions;
-use crate::algorithms::raw::Raw;
-use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
-use crate::utils::mmap_array::MmapArray;
+use super::QuantizationInput;
+use crate::global::GlobalQuantization;
+pub use base::global::*;
+pub use base::index::*;
+pub use base::scalar::*;
+pub use base::vector::*;
+use num_traits::Float;
+use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::Arc;
+use utils::mmap_array::MmapArray;
 
-pub struct ScalarQuantization<S: G> {
+pub struct ScalarQuantization<S: GlobalQuantization, I: QuantizationInput<S>> {
     dims: u16,
     max: Vec<Scalar<S>>,
     min: Vec<Scalar<S>>,
     codes: MmapArray<u8>,
+    phantom: PhantomData<fn(I) -> I>,
 }
 
-unsafe impl<S: G> Send for ScalarQuantization<S> {}
-unsafe impl<S: G> Sync for ScalarQuantization<S> {}
+unsafe impl<S: GlobalQuantization, I: QuantizationInput<S>> Send for ScalarQuantization<S, I> {}
+unsafe impl<S: GlobalQuantization, I: QuantizationInput<S>> Sync for ScalarQuantization<S, I> {}
 
-impl<S: G> ScalarQuantization<S> {
+impl<S: GlobalQuantization, I: QuantizationInput<S>> ScalarQuantization<S, I> {
     pub fn codes(&self, i: u32) -> &[u8] {
         let s = i as usize * self.dims as usize;
         let e = (i + 1) as usize * self.dims as usize;
         &self.codes[s..e]
     }
-}
-
-impl<S: G> Quan<S> for ScalarQuantization<S> {
-    fn create(
+    pub fn create(
         path: &Path,
         options: IndexOptions,
         _: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
+        raw: &I,
         permutation: Vec<u32>, // permutation is the mapping from placements to original ids
     ) -> Self {
         std::fs::create_dir(path).unwrap();
@@ -57,16 +57,17 @@ impl<S: G> Quan<S> for ScalarQuantization<S> {
             result.into_iter()
         });
         let codes = MmapArray::create(&path.join("codes"), codes_iter);
-        sync_dir(path);
+        utils::dir_ops::sync_dir(path);
         Self {
             dims,
             max,
             min,
             codes,
+            phantom: PhantomData,
         }
     }
 
-    fn open2(path: &Path, options: IndexOptions, _: QuantizationOptions, _: &Arc<Raw<S>>) -> Self {
+    pub fn open(path: &Path, options: IndexOptions, _: QuantizationOptions, _: &I) -> Self {
         let dims = options.vector.dims;
         let max = serde_json::from_slice(&std::fs::read("max").unwrap()).unwrap();
         let min = serde_json::from_slice(&std::fs::read("min").unwrap()).unwrap();
@@ -76,16 +77,17 @@ impl<S: G> Quan<S> for ScalarQuantization<S> {
             max,
             min,
             codes,
+            phantom: PhantomData,
         }
     }
 
-    fn distance(&self, lhs: Borrowed<'_, S>, rhs: u32) -> F32 {
+    pub fn distance(&self, lhs: Borrowed<'_, S>, rhs: u32) -> F32 {
         let dims = self.dims;
         let rhs = self.codes(rhs);
         S::scalar_quantization_distance(dims, &self.max, &self.min, lhs, rhs)
     }
 
-    fn distance2(&self, lhs: u32, rhs: u32) -> F32 {
+    pub fn distance2(&self, lhs: u32, rhs: u32) -> F32 {
         let dims = self.dims;
         let lhs = self.codes(lhs);
         let rhs = self.codes(rhs);

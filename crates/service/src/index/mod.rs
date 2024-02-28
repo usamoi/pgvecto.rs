@@ -9,7 +9,7 @@ use self::segments::sealed::SealedSegment;
 use crate::index::optimizing::indexing::OptimizerIndexing;
 use crate::index::optimizing::sealing::OptimizerSealing;
 use crate::prelude::*;
-use crate::utils::clean::clean;
+use crate::utils::clean::clean_prefix;
 use crate::utils::dir_ops::sync_dir;
 use crate::utils::file_atomic::FileAtomic;
 use crate::utils::tournament_tree::LoserTree;
@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -43,19 +44,18 @@ pub struct Index<S: G> {
 }
 
 impl<S: G> Index<S> {
-    pub fn create(path: PathBuf, options: IndexOptions) -> Result<Arc<Self>, CreateError> {
+    pub fn create(path: &Path, options: IndexOptions) -> Result<Arc<Self>, CreateError> {
         if let Err(err) = options.validate() {
             return Err(CreateError::InvalidIndexOptions {
                 reason: err.to_string(),
             });
         }
-        std::fs::create_dir(&path).unwrap();
+        std::fs::create_dir(path).unwrap();
         std::fs::write(
             path.join("options"),
             serde_json::to_string::<IndexOptions>(&options).unwrap(),
         )
         .unwrap();
-        std::fs::create_dir(path.join("segments")).unwrap();
         let startup = FileAtomic::create(
             path.join("startup"),
             IndexStartup {
@@ -63,10 +63,10 @@ impl<S: G> Index<S> {
                 growings: HashSet::new(),
             },
         );
-        let delete = Delete::create(path.join("delete"));
-        sync_dir(&path);
+        let delete = Delete::create(&path.join("delete"));
+        sync_dir(path);
         let index = Arc::new(Index {
-            path: path.clone(),
+            path: path.to_path_buf(),
             options: options.clone(),
             delete: delete.clone(),
             protect: Mutex::new(IndexProtect {
@@ -84,21 +84,26 @@ impl<S: G> Index<S> {
             })),
             instant_index: AtomicCell::new(Instant::now()),
             instant_write: AtomicCell::new(Instant::now()),
-            _tracker: Arc::new(IndexTracker { path }),
+            _tracker: Arc::new(IndexTracker {
+                path: path.to_path_buf(),
+            }),
         });
         OptimizerIndexing::new(index.clone()).spawn();
         OptimizerSealing::new(index.clone()).spawn();
         Ok(index)
     }
 
-    pub fn open(path: PathBuf) -> Arc<Self> {
+    pub fn open(path: &Path) -> Arc<Self> {
         let options =
             serde_json::from_slice::<IndexOptions>(&std::fs::read(path.join("options")).unwrap())
                 .unwrap();
-        let tracker = Arc::new(IndexTracker { path: path.clone() });
+        let tracker = Arc::new(IndexTracker {
+            path: path.to_path_buf(),
+        });
         let startup = FileAtomic::<IndexStartup>::open(path.join("startup"));
-        clean(
-            path.join("segments"),
+        clean_prefix(
+            path,
+            "segments_",
             startup
                 .get()
                 .sealeds
@@ -115,7 +120,7 @@ impl<S: G> Index<S> {
                     uuid,
                     SealedSegment::open(
                         tracker.clone(),
-                        path.join("segments").join(uuid.to_string()),
+                        &path.join(format!("segments_{uuid}")),
                         uuid,
                         options.clone(),
                     ),
@@ -131,16 +136,16 @@ impl<S: G> Index<S> {
                     uuid,
                     GrowingSegment::open(
                         tracker.clone(),
-                        path.join("segments").join(uuid.to_string()),
+                        &path.join(format!("segments_{uuid}")),
                         uuid,
                         options.clone(),
                     ),
                 )
             })
             .collect::<HashMap<_, _>>();
-        let delete = Delete::open(path.join("delete"));
+        let delete = Delete::open(&path.join("delete"));
         let index = Arc::new(Index {
-            path: path.clone(),
+            path: path.to_path_buf(),
             options: options.clone(),
             delete: delete.clone(),
             protect: Mutex::new(IndexProtect {
@@ -182,9 +187,7 @@ impl<S: G> Index<S> {
         let write_segment_uuid = Uuid::new_v4();
         let write_segment = GrowingSegment::create(
             self._tracker.clone(),
-            self.path
-                .join("segments")
-                .join(write_segment_uuid.to_string()),
+            &self.path.join(format!("segments_{write_segment_uuid}")),
             write_segment_uuid,
             self.options.clone(),
         );
@@ -295,8 +298,7 @@ impl<S: G> IndexView<S> {
         impl<'a, F: FnMut(Pointer) -> bool + Clone> Filter for Filtering<'a, F> {
             fn check(&mut self, payload: Payload) -> bool {
                 !self.enable
-                    || (self.delete.check(payload).is_some()
-                        && (self.external)(Pointer::from_u48(payload >> 16)))
+                    || (self.delete.check(payload).is_some() && (self.external)(payload.pointer()))
             }
         }
 
@@ -323,7 +325,7 @@ impl<S: G> IndexView<S> {
         let loser = LoserTree::new(heaps);
         Ok(loser.filter_map(|x| {
             if opts.prefilter_enable || self.delete.check(x.payload).is_some() {
-                Some(Pointer::from_u48(x.payload >> 16))
+                Some(x.payload.pointer())
             } else {
                 None
             }
@@ -363,8 +365,7 @@ impl<S: G> IndexView<S> {
         impl<'a, F: FnMut(Pointer) -> bool + Clone + 'a> Filter for Filtering<'a, F> {
             fn check(&mut self, payload: Payload) -> bool {
                 !self.enable
-                    || (self.delete.check(payload).is_some()
-                        && (self.external)(Pointer::from_u48(payload >> 16)))
+                    || (self.delete.check(payload).is_some() && (self.external)(payload.pointer()))
             }
         }
 
@@ -397,7 +398,7 @@ impl<S: G> IndexView<S> {
         let loser = LoserTree::new(beta);
         Ok(loser.filter_map(|x| {
             if opts.prefilter_enable || self.delete.check(x.payload).is_some() {
-                Some(Pointer::from_u48(x.payload >> 16))
+                Some(x.payload.pointer())
             } else {
                 None
             }
@@ -432,7 +433,7 @@ impl<S: G> IndexView<S> {
             return Err(InsertError::InvalidVector);
         }
 
-        let payload = (pointer.as_u48() << 16) | self.delete.version(pointer) as Payload;
+        let payload = Payload::new(pointer, self.delete.version(pointer));
         if let Some((_, growing)) = self.write.as_ref() {
             use crate::index::segments::growing::GrowingSegmentInsertError;
             if let Err(GrowingSegmentInsertError) = growing.insert(vector, payload) {

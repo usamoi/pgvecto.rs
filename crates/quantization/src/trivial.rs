@@ -1,59 +1,59 @@
-use crate::algorithms::quantization::Quan;
-use crate::algorithms::quantization::QuantizationOptions;
-use crate::algorithms::raw::Raw;
-use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
+use super::QuantizationInput;
+use crate::global::GlobalQuantization;
+pub use base::global::*;
+pub use base::index::*;
+pub use base::scalar::*;
+use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::Arc;
 
-pub struct TrivialQuantization<S: G> {
-    raw: Arc<Raw<S>>,
+pub struct TrivialQuantization<S: GlobalQuantization, I: QuantizationInput<S>> {
+    raw: I,
     permutation: Vec<u32>,
+    phantom: PhantomData<fn(S) -> S>,
 }
 
-impl<S: G> TrivialQuantization<S> {
+impl<S: GlobalQuantization, I: QuantizationInput<S>> TrivialQuantization<S, I> {
     pub fn codes(&self, i: u32) -> Borrowed<'_, S> {
         self.raw.vector(self.permutation[i as usize])
     }
-}
-
-impl<S: G> Quan<S> for TrivialQuantization<S> {
     // permutation is the mapping from placements to original ids
-    fn create(
+    pub fn create(
         path: &Path,
         _: IndexOptions,
         _: QuantizationOptions,
-        raw: &Arc<Raw<S>>,
+        raw: &I,
         permutation: Vec<u32>,
     ) -> Self {
-        // here we cannot modify raw, so we record permutation for translation
         std::fs::create_dir(path).unwrap();
-        sync_dir(path);
+        // here we cannot modify raw, so we record permutation for translation
         std::fs::write(
             path.join("permutation"),
             serde_json::to_string(&permutation).unwrap(),
         )
         .unwrap();
+        utils::dir_ops::sync_dir(path);
         Self {
             raw: raw.clone(),
             permutation,
+            phantom: PhantomData,
         }
     }
 
-    fn open2(path: &Path, _: IndexOptions, _: QuantizationOptions, raw: &Arc<Raw<S>>) -> Self {
+    pub fn open(path: &Path, _: IndexOptions, _: QuantizationOptions, raw: &I) -> Self {
         let permutation =
             serde_json::from_slice(&std::fs::read(path.join("permutation")).unwrap()).unwrap();
         Self {
             raw: raw.clone(),
             permutation,
+            phantom: PhantomData,
         }
     }
 
-    fn distance(&self, lhs: Borrowed<'_, S>, rhs: u32) -> F32 {
+    pub fn distance(&self, lhs: Borrowed<'_, S>, rhs: u32) -> F32 {
         S::distance(lhs, self.codes(rhs))
     }
 
-    fn distance2(&self, lhs: u32, rhs: u32) -> F32 {
+    pub fn distance2(&self, lhs: u32, rhs: u32) -> F32 {
         S::distance(self.codes(lhs), self.codes(rhs))
     }
 }

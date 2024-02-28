@@ -1,14 +1,9 @@
-use crate::algorithms::clustering::elkan_k_means::ElkanKMeans;
-use crate::algorithms::quantization::product::ProductQuantization;
-use crate::algorithms::quantization::Quan;
 use crate::algorithms::raw::Raw;
 use crate::index::segments::growing::GrowingSegment;
 use crate::index::segments::sealed::SealedSegment;
 use crate::prelude::*;
-use crate::utils::dir_ops::sync_dir;
-use crate::utils::element_heap::ElementHeap;
-use crate::utils::mmap_array::MmapArray;
-use crate::utils::vec2::Vec2;
+use elkan_k_means::ElkanKMeans;
+use quantization::global::GlobalProductQuantization;
 use rand::seq::index::sample;
 use rand::thread_rng;
 use rayon::iter::IntoParallelRefMutIterator;
@@ -16,9 +11,10 @@ use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::ParallelSliceMut;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fs::create_dir;
 use std::path::Path;
 use std::sync::Arc;
+use utils::mmap_array::MmapArray;
+use utils::vec2::Vec2;
 
 pub struct IvfPq<S: G> {
     mmap: IvfMmap<S>,
@@ -31,10 +27,10 @@ impl<S: G> IvfPq<S> {
         sealed: Vec<Arc<SealedSegment<S>>>,
         growing: Vec<Arc<GrowingSegment<S>>>,
     ) -> Self {
-        create_dir(path).unwrap();
+        std::fs::create_dir(path).unwrap();
         let ram = make(path, sealed, growing, options);
         let mmap = save(ram, path);
-        sync_dir(path);
+        crate::utils::dir_ops::sync_dir(path);
         Self { mmap }
     }
 
@@ -79,7 +75,7 @@ unsafe impl<S: G> Sync for IvfPq<S> {}
 
 pub struct IvfRam<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: ProductQuantization<S>,
+    quantization: ProductIvfQuantization<S>,
     // ----------------------
     dims: u16,
     // ----------------------
@@ -95,7 +91,7 @@ unsafe impl<S: G> Sync for IvfRam<S> {}
 
 pub struct IvfMmap<S: G> {
     raw: Arc<Raw<S>>,
-    quantization: ProductQuantization<S>,
+    quantization: ProductIvfQuantization<S>,
     // ----------------------
     dims: u16,
     // ----------------------
@@ -182,7 +178,6 @@ pub fn make<S: G>(
             .flat_map(|i| &invlists_payloads[i as usize])
             .copied(),
     );
-    sync_dir(path);
     let residuals = {
         let mut residuals = Vec2::new(options.vector.dims, n as usize);
         residuals
@@ -196,13 +191,13 @@ pub fn make<S: G>(
             });
         residuals
     };
-    let mut quantization = ProductQuantization::encode(
+    let quantization = ProductIvfQuantization::create(
         &path.join("quantization"),
         options.clone(),
         quantization_opts,
         &residuals,
+        &centroids,
     );
-    quantization.precompute_table(&path.join("quantization"), &centroids);
     IvfRam {
         raw,
         quantization,
@@ -236,7 +231,7 @@ pub fn save<S: G>(ram: IvfRam<S>, path: &Path) -> IvfMmap<S> {
 
 pub fn open<S: G>(path: &Path, options: IndexOptions) -> IvfMmap<S> {
     let raw = Arc::new(Raw::open(&path.join("raw"), options.clone()));
-    let quantization = ProductQuantization::open2(
+    let quantization = ProductIvfQuantization::open(
         &path.join("quantization"),
         options.clone(),
         options.indexing.clone().unwrap_ivf().quantization,
@@ -264,23 +259,20 @@ pub fn basic<S: G>(
     mut filter: impl Filter,
 ) -> BinaryHeap<Reverse<Element>> {
     let dense = vector.to_vec();
-    let mut lists = ElementHeap::new(nprobe as usize);
+    let mut lists = IndexHeap::new(nprobe as usize);
     for i in 0..mmap.nlist {
         let centroid = mmap.centroids(i);
         let distance = S::product_quantization_dense_distance(&dense, centroid);
         if lists.check(distance) {
-            lists.push(Element {
-                distance,
-                payload: i as Payload,
-            });
+            lists.push((distance, i));
         }
     }
     let runtime_table = mmap.quantization.init_query(vector.to_vec().as_ref());
     let lists = lists.into_sorted_vec();
     let mut result = BinaryHeap::new();
     for i in lists.iter() {
-        let key = i.payload as usize;
-        let coarse_dis = i.distance;
+        let key = i.1 as usize;
+        let coarse_dis = i.0;
         let start = mmap.ptr[key];
         let end = mmap.ptr[key + 1];
         for j in start..end {
@@ -308,23 +300,20 @@ pub fn vbase<'a, S: G>(
     mut filter: impl Filter + 'a,
 ) -> (Vec<Element>, Box<(dyn Iterator<Item = Element> + 'a)>) {
     let dense = vector.to_vec();
-    let mut lists = ElementHeap::new(nprobe as usize);
+    let mut lists = IndexHeap::new(nprobe as usize);
     for i in 0..mmap.nlist {
         let centroid = mmap.centroids(i);
         let distance = S::product_quantization_dense_distance(&dense, centroid);
         if lists.check(distance) {
-            lists.push(Element {
-                distance,
-                payload: i as Payload,
-            });
+            lists.push((distance, i));
         }
     }
     let runtime_table = mmap.quantization.init_query(vector.to_vec().as_ref());
     let lists = lists.into_sorted_vec();
     let mut result = Vec::new();
     for i in lists.iter() {
-        let key = i.payload as usize;
-        let coarse_dis = i.distance;
+        let key = i.1 as usize;
+        let coarse_dis = i.0;
         let start = mmap.ptr[key];
         let end = mmap.ptr[key + 1];
         for j in start..end {
@@ -343,4 +332,282 @@ pub fn vbase<'a, S: G>(
         }
     }
     (result, Box::new(std::iter::empty()))
+}
+
+pub struct IndexHeap {
+    binary_heap: BinaryHeap<(F32, u32)>,
+    k: usize,
+}
+
+impl IndexHeap {
+    pub fn new(k: usize) -> Self {
+        assert!(k != 0);
+        Self {
+            binary_heap: BinaryHeap::new(),
+            k,
+        }
+    }
+    pub fn check(&self, distance: F32) -> bool {
+        self.binary_heap.len() < self.k || distance < self.binary_heap.peek().unwrap().0
+    }
+    pub fn push(&mut self, element: (F32, u32)) -> Option<(F32, u32)> {
+        self.binary_heap.push(element);
+        if self.binary_heap.len() == self.k + 1 {
+            self.binary_heap.pop()
+        } else {
+            None
+        }
+    }
+    pub fn into_sorted_vec(self) -> Vec<(F32, u32)> {
+        self.binary_heap.into_sorted_vec()
+    }
+}
+
+pub struct ProductIvfQuantization<S: G> {
+    dims: u16,
+    ratio: u16,
+    centroids: Vec<Scalar<S>>,
+    codes: MmapArray<u8>,
+    precomputed_table: Vec<F32>,
+}
+
+unsafe impl<S: G> Send for ProductIvfQuantization<S> {}
+unsafe impl<S: G> Sync for ProductIvfQuantization<S> {}
+
+impl<S: G> ProductIvfQuantization<S> {
+    pub fn codes(&self, i: u32) -> &[u8] {
+        let width = self.dims.div_ceil(self.ratio);
+        let s = i as usize * width as usize;
+        let e = (i + 1) as usize * width as usize;
+        &self.codes[s..e]
+    }
+}
+
+impl<S: G> ProductIvfQuantization<S> {
+    pub fn create(
+        path: &Path,
+        options: IndexOptions,
+        quantization_options: QuantizationOptions,
+        raw: &Vec2<Scalar<S>>,
+        coarse_centroids: &Vec2<Scalar<S>>,
+    ) -> Self {
+        std::fs::create_dir(path).unwrap();
+        let QuantizationOptions::Product(quantization_options) = quantization_options else {
+            unreachable!()
+        };
+        let dims = options.vector.dims;
+        let ratio = quantization_options.ratio as u16;
+        let n = raw.len();
+        let m = std::cmp::min(n, quantization_options.sample as usize);
+        let samples = {
+            let f = sample(&mut thread_rng(), n, m).into_vec();
+            let mut samples = Vec2::new(options.vector.dims, m);
+            for i in 0..m {
+                samples[i].copy_from_slice(&raw[f[i]]);
+            }
+            samples
+        };
+        let width = dims.div_ceil(ratio);
+        // a temp layout (width * 256 * subdims) for par_chunks_mut
+        let mut tmp_centroids = vec![Scalar::<S>::zero(); 256 * dims as usize];
+        // this par_for parallelizes over sub quantizers
+        tmp_centroids
+            .par_chunks_mut(256 * ratio as usize)
+            .enumerate()
+            .for_each(|(i, v)| {
+                // i is the index of subquantizer
+                let subdims = std::cmp::min(ratio, dims - ratio * i as u16) as usize;
+                let mut subsamples = Vec2::new(subdims as u16, m);
+                for j in 0..m {
+                    let src = &samples[j][i * ratio as usize..][..subdims];
+                    subsamples[j].copy_from_slice(src);
+                }
+                let mut k_means = ElkanKMeans::<S::ProductQuantizationL2>::new(256, subsamples);
+                for _ in 0..25 {
+                    if k_means.iterate() {
+                        break;
+                    }
+                }
+                let centroid = k_means.finish();
+                for j in 0usize..=255 {
+                    v[j * subdims..][..subdims].copy_from_slice(&centroid[j]);
+                }
+            });
+        // transform back to normal layout (256 * width * subdims)
+        let mut centroids = vec![Scalar::<S>::zero(); 256 * dims as usize];
+        centroids
+            .par_chunks_mut(dims as usize)
+            .enumerate()
+            .for_each(|(i, v)| {
+                for j in 0..width {
+                    let subdims = std::cmp::min(ratio, dims - ratio * j) as usize;
+                    v[(j * ratio) as usize..][..subdims].copy_from_slice(
+                        &tmp_centroids[(j * ratio) as usize * 256..][i * subdims..][..subdims],
+                    );
+                }
+            });
+        let mut codes = vec![0u8; n * width as usize];
+        codes
+            .par_chunks_mut(width as usize)
+            .enumerate()
+            .for_each(|(id, v)| {
+                let vector = raw[id].to_vec();
+                let width = dims.div_ceil(ratio);
+                for i in 0..width {
+                    let subdims = std::cmp::min(ratio, dims - ratio * i);
+                    let mut minimal = F32::infinity();
+                    let mut target = 0u8;
+                    let left = &vector[(i * ratio) as usize..][..subdims as usize];
+                    for j in 0u8..=255 {
+                        let right = &centroids[j as usize * dims as usize..]
+                            [(i * ratio) as usize..][..subdims as usize];
+                        let dis = S::ProductQuantizationL2::product_quantization_dense_distance(
+                            left, right,
+                        );
+                        if dis < minimal {
+                            minimal = dis;
+                            target = j;
+                        }
+                    }
+                    v[i as usize] = target;
+                }
+            });
+        std::fs::write(
+            path.join("centroids"),
+            serde_json::to_string(&centroids).unwrap(),
+        )
+        .unwrap();
+        let codes = MmapArray::create(&path.join("codes"), codes.into_iter());
+        let nlist = coarse_centroids.len();
+        let width = dims.div_ceil(ratio);
+        let mut precomputed_table = Vec::new();
+        precomputed_table.resize(nlist * width as usize * 256, F32::zero());
+        precomputed_table
+            .par_chunks_mut(width as usize * 256)
+            .enumerate()
+            .for_each(|(i, v)| {
+                let x_c = &coarse_centroids[i];
+                for j in 0..width {
+                    let subdims = std::cmp::min(ratio, dims - ratio * j);
+                    let sub_x_c = &x_c[(j * ratio) as usize..][..subdims as usize];
+                    for k in 0usize..256 {
+                        let sub_x_r = &centroids[k * dims as usize..][(j * ratio) as usize..]
+                            [..subdims as usize];
+                        v[j as usize * 256 + k] = squared_norm::<S>(subdims, sub_x_r)
+                            + F32(2.0) * inner_product::<S>(subdims, sub_x_c, sub_x_r);
+                    }
+                }
+            });
+        std::fs::write(
+            path.join("table"),
+            serde_json::to_string(&precomputed_table).unwrap(),
+        )
+        .unwrap();
+        crate::utils::dir_ops::sync_dir(path);
+        Self {
+            dims,
+            ratio,
+            centroids,
+            codes,
+            precomputed_table,
+        }
+    }
+
+    pub fn open(
+        path: &Path,
+        options: IndexOptions,
+        quantization_options: QuantizationOptions,
+        _: &Arc<Raw<S>>,
+    ) -> Self {
+        let QuantizationOptions::Product(quantization_options) = quantization_options else {
+            unreachable!()
+        };
+        let centroids =
+            serde_json::from_slice(&std::fs::read(path.join("centroids")).unwrap()).unwrap();
+        let codes = MmapArray::open(&path.join("codes"));
+        let precomputed_table =
+            serde_json::from_slice(&std::fs::read(path.join("table")).unwrap()).unwrap();
+        Self {
+            dims: options.vector.dims,
+            ratio: quantization_options.ratio as _,
+            centroids,
+            codes,
+            precomputed_table,
+        }
+    }
+
+    // compute term2 at query time
+    pub fn init_query(&self, query: &[Scalar<S>]) -> Vec<F32> {
+        if S::DISTANCE_KIND == DistanceKind::Cos {
+            return Vec::new();
+        }
+        let dims = self.dims;
+        let ratio = self.ratio;
+        let width = dims.div_ceil(ratio);
+        let mut runtime_table = vec![F32::zero(); width as usize * 256];
+        for i in 0..256 {
+            for j in 0..width {
+                let subdims = std::cmp::min(ratio, dims - ratio * j);
+                let sub_query = &query[(j * ratio) as usize..][..subdims as usize];
+                let centroid = &self.centroids[i * dims as usize..][(j * ratio) as usize..]
+                    [..subdims as usize];
+                runtime_table[j as usize * 256 + i] =
+                    F32(-1.0) * inner_product::<S>(subdims, sub_query, centroid);
+            }
+        }
+        runtime_table
+    }
+
+    // add up all terms given codes
+    pub fn distance_with_codes(
+        &self,
+        lhs: Borrowed<'_, S>,
+        rhs: u32,
+        delta: &[Scalar<S>],
+        key: usize,
+        coarse_dis: F32,
+        runtime_table: &[F32],
+    ) -> F32 {
+        if S::DISTANCE_KIND == DistanceKind::Cos {
+            return self.distance_with_delta(lhs, rhs, delta);
+        }
+        let mut result = coarse_dis;
+        let codes = self.codes(rhs);
+        let width = self.dims.div_ceil(self.ratio);
+        let precomputed_table = &self.precomputed_table[key * width as usize * 256..];
+        if S::DISTANCE_KIND == DistanceKind::L2 {
+            for i in 0..width {
+                result += precomputed_table[i as usize * 256 + codes[i as usize] as usize]
+                    + F32(2.0) * runtime_table[i as usize * 256 + codes[i as usize] as usize];
+            }
+        } else if S::DISTANCE_KIND == DistanceKind::Dot {
+            for i in 0..width {
+                result += runtime_table[i as usize * 256 + codes[i as usize] as usize];
+            }
+        }
+        result
+    }
+
+    fn distance_with_delta(&self, lhs: Borrowed<'_, S>, rhs: u32, delta: &[Scalar<S>]) -> F32 {
+        let dims = self.dims;
+        let ratio = self.ratio;
+        let rhs = self.codes(rhs);
+        S::product_quantization_distance_with_delta(dims, ratio, &self.centroids, lhs, rhs, delta)
+    }
+}
+
+pub fn squared_norm<S: G>(dims: u16, vec: &[Scalar<S>]) -> F32 {
+    let mut result = F32::zero();
+    for i in 0..dims as usize {
+        result += F32((vec[i] * vec[i]).to_f32());
+    }
+    result
+}
+
+pub fn inner_product<S: G>(dims: u16, lhs: &[Scalar<S>], rhs: &[Scalar<S>]) -> F32 {
+    let mut result = F32::zero();
+    for i in 0..dims as usize {
+        result += F32((lhs[i] * rhs[i]).to_f32());
+    }
+    result
 }

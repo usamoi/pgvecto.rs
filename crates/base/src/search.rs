@@ -1,20 +1,45 @@
 use crate::scalar::F32;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, num::ParseIntError, str::FromStr};
+use std::fmt::Display;
+use std::num::ParseIntError;
+use std::str::FromStr;
 
-pub type Payload = u64;
+#[derive(
+    Debug, Default, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct Payload {
+    pub pointer: Pointer,
+    pub time: u64,
+}
+
+impl Payload {
+    pub fn new(pointer: Pointer, time: u64) -> Self {
+        Self { pointer, time }
+    }
+    pub fn pointer(self) -> Pointer {
+        self.pointer
+    }
+    pub fn time(self) -> u64 {
+        self.time
+    }
+}
+
+unsafe impl bytemuck::Zeroable for Payload {}
+unsafe impl bytemuck::Pod for Payload {}
 
 pub trait Filter: Clone {
     fn check(&mut self, payload: Payload) -> bool;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Element {
     pub distance: F32,
     pub payload: Payload,
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct Handle {
     pub newtype: u32,
 }
@@ -41,17 +66,9 @@ impl FromStr for Handle {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct Pointer {
     pub newtype: u64,
-}
-
-impl Pointer {
-    pub fn from_u48(value: u64) -> Self {
-        assert!(value < (1u64 << 48));
-        Self { newtype: value }
-    }
-    pub fn as_u48(self) -> u64 {
-        self.newtype
-    }
 }

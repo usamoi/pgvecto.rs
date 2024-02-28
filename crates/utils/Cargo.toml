@@ -1,0 +1,12 @@
+[package]
+name = "utils"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base = { path = "../base" }
+bytemuck.workspace = true
+memmap2.workspace = true
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
 use crate::algorithms::raw::RawRam;
 use crate::prelude::*;
 use crate::storage::Storage;
-use crate::utils::mmap_array::MmapArray;
 use std::path::Path;
+use utils::mmap_array::MmapArray;
 
 pub struct SparseMmap {
     indexes: MmapArray<u16>,

@@ -10,6 +10,7 @@ use base::worker::*;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,8 +21,8 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn create(path: PathBuf) -> Arc<Self> {
-        std::fs::create_dir(&path).unwrap();
+    pub fn create(path: &Path) -> Arc<Self> {
+        std::fs::create_dir(path).unwrap();
         std::fs::create_dir(path.join("indexes")).unwrap();
         let startup = FileAtomic::create(path.join("startup"), WorkerStartup::new());
         let indexes = HashMap::new();
@@ -29,18 +30,18 @@ impl Worker {
             indexes: indexes.clone(),
         });
         let protect = WorkerProtect { startup, indexes };
-        sync_dir(&path);
+        sync_dir(path);
         self::metadata::Metadata::write(path.join("metadata"));
         Arc::new(Worker {
-            path,
+            path: path.to_path_buf(),
             protect: Mutex::new(protect),
             view: ArcSwap::new(view),
         })
     }
-    pub fn check(path: PathBuf) -> bool {
+    pub fn check(path: &Path) -> bool {
         self::metadata::Metadata::read(path.join("metadata")).is_ok()
     }
-    pub fn open(path: PathBuf) -> Arc<Self> {
+    pub fn open(path: &Path) -> Arc<Self> {
         let startup = FileAtomic::<WorkerStartup>::open(path.join("startup"));
         clean(
             path.join("indexes"),
@@ -49,7 +50,7 @@ impl Worker {
         let mut indexes = HashMap::new();
         for &id in startup.get().indexes.iter() {
             let path = path.join("indexes").join(id.to_string());
-            let index = Instance::open(path);
+            let index = Instance::open(&path);
             indexes.insert(id, index);
         }
         let view = Arc::new(WorkerView {
@@ -57,7 +58,7 @@ impl Worker {
         });
         let protect = WorkerProtect { startup, indexes };
         Arc::new(Worker {
-            path,
+            path: path.to_path_buf(),
             protect: Mutex::new(protect),
             view: ArcSwap::new(view),
         })
@@ -74,7 +75,7 @@ impl WorkerOperations for Worker {
         match protect.indexes.entry(handle) {
             Entry::Vacant(o) => {
                 let index =
-                    Instance::create(self.path.join("indexes").join(handle.to_string()), options)?;
+                    Instance::create(&self.path.join("indexes").join(handle.to_string()), options)?;
                 o.insert(index);
                 protect.maintain(&self.view);
                 Ok(())

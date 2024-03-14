@@ -7,6 +7,9 @@ printf "ARCH = ${ARCH}\n"
 
 export PLATFORM=$(echo $ARCH | sed 's/aarch64/arm64/; s/x86_64/amd64/')
 
+mkdir -p ~/.pgrx_binding && cp ./vendor/pgrx_binding/pg${VERSION}_${ARCH}-unknown-linux-gnu.rs ~/.pgrx_binding/pg${VERSION}_raw_bindings.rs
+export PGRX_TARGET_INFO_PATH_PG$VERSION=$HOME/.pgrx_binding
+
 cargo build --no-default-features --features pg$VERSION --release --target ${ARCH}-unknown-linux-gnu
 ./tools/schema.sh --no-default-features --features pg$VERSION --release --target ${ARCH}-unknown-linux-gnu | expand -t 4 > ./target/vectors--$SEMVER.sql
 

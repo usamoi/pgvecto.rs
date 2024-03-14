@@ -70,7 +70,10 @@ jobs:
       - name: Set up PostgreSQL
         run: ./scripts/ci_setup.sh
       - name: Set up Pgrx
-        run: mkdir -p ~/.pgrx && echo "configs.pg$VERSION=\"$(which pg_config)\"" > ~/.pgrx/config.toml
+        run: |
+          mkdir -p ~/.pgrx && echo "configs.pg$VERSION=\"$(which pg_config)\"" > ~/.pgrx/config.toml
+          mkdir -p ~/.pgrx_binding && cp ./vendor/pgrx_binding/pg${VERSION}_$(uname --machine)-unknown-linux-gnu.rs ~/.pgrx_binding/pg${VERSION}_raw_bindings.rs
+          echo PGRX_TARGET_INFO_PATH_PG$VERSION=$HOME/.pgrx_binding >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -133,7 +136,10 @@ jobs:
       - name: Set up PostgreSQL
         run: ./scripts/ci_setup.sh
       - name: Set up Pgrx
-        run: mkdir -p ~/.pgrx && echo "configs.pg$VERSION=\"$(which pg_config)\"" > ~/.pgrx/config.toml
+        run: |
+          mkdir -p ~/.pgrx && echo "configs.pg$VERSION=\"$(which pg_config)\"" > ~/.pgrx/config.toml
+          mkdir -p ~/.pgrx_binding && cp ./vendor/pgrx_binding/pg${VERSION}_$(uname --machine)-unknown-linux-gnu.rs ~/.pgrx_binding/pg${VERSION}_raw_bindings.rs
+          echo PGRX_TARGET_INFO_PATH_PG$VERSION=$HOME/.pgrx_binding >> "$GITHUB_ENV"
       - name: Set up Binstall
         run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
       - name: Semantic check

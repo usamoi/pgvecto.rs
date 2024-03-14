@@ -1,2 +1,5 @@
 [default.extend-words]
 ND = "ND"
+
+[files]
+extend-exclude = ["assets/pg_config/*.txt", "assets/pgrx_binding/*.rs"]

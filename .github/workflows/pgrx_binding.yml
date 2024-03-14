@@ -1,0 +1,49 @@
+name: PGRX Binding
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  SCCACHE_GHA_ENABLED: true
+  RUSTC_WRAPPER: sccache
+  RUSTFLAGS: "-Dwarnings"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Generate
+        run: |
+          export PGRX=$(grep 'pgrx = {' Cargo.toml | cut -d '"' -f 2 | head -n 1)
+          docker run --rm --platform linux/amd64 -v ./:/mnt/build \
+            -e "VERSION=14" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          docker run --rm --platform linux/amd64 -v ./:/mnt/build \
+            -e "VERSION=15" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          docker run --rm --platform linux/amd64 -v ./:/mnt/build \
+            -e "VERSION=16" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          docker run --rm --platform linux/arm64 -v ./:/mnt/build \
+            -e "VERSION=14" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          docker run --rm --platform linux/arm64 -v ./:/mnt/build \
+            -e "VERSION=15" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          docker run --rm --platform linux/arm64 -v ./:/mnt/build \
+            -e "VERSION=16" -e "PGRX=$PGRX" debian:buster bash /mnt/build/scripts/pgrx_binding.sh &
+          wait
+          sudo chown -R $USER ./assets
+      - name: Commit
+        run: |
+          git config --global user.email "support@tensorchord.ai"
+          git config --global user.name "CI[bot]"
+          git add -A
+          git commit -s -m "chore: pgrx binding"
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6

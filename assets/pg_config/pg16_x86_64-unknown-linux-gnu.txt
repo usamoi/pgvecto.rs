@@ -1,0 +1,23 @@
+BINDIR = /usr/bin
+DOCDIR = /usr/share/doc/postgresql
+HTMLDIR = /usr/share/doc/postgresql
+INCLUDEDIR = /usr/include
+PKGINCLUDEDIR = /usr/include/postgresql
+INCLUDEDIR-SERVER = /usr/include/postgresql/server
+LIBDIR = /usr/lib
+PKGLIBDIR = /usr/lib/postgresql
+LOCALEDIR = /usr/share/locale
+MANDIR = /usr/share/man
+SHAREDIR = /usr/share/postgresql
+SYSCONFDIR = /etc/postgresql
+PGXS = /usr/lib/postgresql/pgxs/src/makefiles/pgxs.mk
+CONFIGURE =  '--prefix=/usr' '--mandir=/usr/share/man' '--datadir=/usr/share/postgresql' '--sysconfdir=/etc' '--with-gssapi' '--with-libxml' '--with-openssl' '--with-perl' '--with-python' '--with-tcl' '--with-pam' '--with-readline' '--with-system-tzdata=/usr/share/zoneinfo' '--with-uuid=e2fs' '--with-icu' '--with-systemd' '--with-ldap' '--with-llvm' '--with-libxslt' '--with-lz4' '--with-zstd' '--enable-nls' '--enable-thread-safety' '--disable-rpath' 'CFLAGS=-march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions         -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security         -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=/build/postgresql/src=/usr/src/debug/postgresql -flto=auto -ffat-lto-objects' 'LDFLAGS=-Wl,-O1 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now          -Wl,-z,pack-relative-relocs -flto=auto' 'CXXFLAGS=-march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions         -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security         -fstack-clash-protection -fcf-protection -Wp,-D_GLIBCXX_ASSERTIONS -g -ffile-prefix-map=/build/postgresql/src=/usr/src/debug/postgresql -flto=auto'
+CC = gcc
+CPPFLAGS = -D_GNU_SOURCE -I/usr/include/libxml2
+CFLAGS = -Wall -Wmissing-prototypes -Wpointer-arith -Wdeclaration-after-statement -Werror=vla -Wendif-labels -Wmissing-format-attribute -Wimplicit-fallthrough=3 -Wcast-function-type -Wshadow=compatible-local -Wformat-security -fno-strict-aliasing -fwrapv -fexcess-precision=standard -Wno-format-truncation -Wno-stringop-truncation -march=x86-64 -mtune=generic -O2 -pipe -fno-plt -fexceptions         -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security         -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=/build/postgresql/src=/usr/src/debug/postgresql -flto=auto -ffat-lto-objects
+CFLAGS_SL = -fPIC
+LDFLAGS = -Wl,-O1 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,-z,pack-relative-relocs -flto=auto -L/usr/lib -Wl,--as-needed
+LDFLAGS_EX = 
+LDFLAGS_SL = 
+LIBS = -lpgcommon -lpgport -lzstd -llz4 -lxslt -lxml2 -lpam -lssl -lcrypto -lgssapi_krb5 -lz -lreadline -lm 
+VERSION = PostgreSQL 16.2

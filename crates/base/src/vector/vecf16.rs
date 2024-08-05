@@ -190,10 +190,40 @@ impl<'a> PartialOrd for Vecf16Borrowed<'a> {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4_avx512fp16")]
 unsafe fn cosine_v4_avx512fp16(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_cosine_avx512fp16(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm512_set1_ph(0.0);
+        let mut xx = _mm512_set1_ph(0.0);
+        let mut yy = _mm512_set1_ph(0.0);
+        while n >= 32 {
+            let x = _mm512_loadu_ph(a.cast());
+            let y = _mm512_loadu_ph(b.cast());
+            a = a.add(32);
+            b = b.add(32);
+            n -= 32;
+            xy = _mm512_fmadd_ph(x, y, xy);
+            xx = _mm512_fmadd_ph(x, x, xx);
+            yy = _mm512_fmadd_ph(y, y, yy);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFFFFFF, n);
+            let x = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, b.cast()));
+            xy = _mm512_fmadd_ph(x, y, xy);
+            xx = _mm512_fmadd_ph(x, x, xx);
+            yy = _mm512_fmadd_ph(y, y, yy);
+        }
+        let rxy = _mm512_reduce_add_ph(xy) as f32;
+        let rxx = _mm512_reduce_add_ph(xx) as f32;
+        let ryy = _mm512_reduce_add_ph(yy) as f32;
+        F32(rxy / (rxx * ryy).sqrt())
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -220,10 +250,40 @@ fn cosine_v4_avx512fp16_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4")]
 unsafe fn cosine_v4(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_cosine_v4(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm512_set1_ps(0.0);
+        let mut xx = _mm512_set1_ps(0.0);
+        let mut yy = _mm512_set1_ps(0.0);
+        while n >= 16 {
+            let x = _mm512_cvtph_ps(_mm256_loadu_epi16(a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_loadu_epi16(b.cast()));
+            a = a.add(16);
+            b = b.add(16);
+            n -= 16;
+            xy = _mm512_fmadd_ps(x, y, xy);
+            xx = _mm512_fmadd_ps(x, x, xx);
+            yy = _mm512_fmadd_ps(y, y, yy);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFF, n) as u16;
+            let x = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, b.cast()));
+            xy = _mm512_fmadd_ps(x, y, xy);
+            xx = _mm512_fmadd_ps(x, x, xx);
+            yy = _mm512_fmadd_ps(y, y, yy);
+        }
+        let rxy = _mm512_reduce_add_ps(xy);
+        let rxx = _mm512_reduce_add_ps(xx);
+        let ryy = _mm512_reduce_add_ps(yy);
+        F32(rxy / (rxx * ryy).sqrt())
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -250,10 +310,52 @@ fn cosine_v4_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v3")]
 unsafe fn cosine_v3(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_cosine_v3(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm256_set1_ps(0.0);
+        let mut xx = _mm256_set1_ps(0.0);
+        let mut yy = _mm256_set1_ps(0.0);
+        while n >= 8 {
+            let x = _mm256_cvtph_ps(_mm_loadu_epi16(a.cast()));
+            let y = _mm256_cvtph_ps(_mm_loadu_epi16(b.cast()));
+            a = a.add(8);
+            b = b.add(8);
+            n -= 8;
+            xy = _mm256_fmadd_ps(x, y, xy);
+            xx = _mm256_fmadd_ps(x, x, xx);
+            yy = _mm256_fmadd_ps(y, y, yy);
+        }
+        #[inline]
+        #[detect::target_cpu(enable = "v3")]
+        unsafe fn _mm256_reduce_add_ps(mut x: __m256) -> f32 {
+            unsafe {
+                x = _mm256_add_ps(x, _mm256_permute2f128_ps(x, x, 1));
+                x = _mm256_hadd_ps(x, x);
+                x = _mm256_hadd_ps(x, x);
+                _mm256_cvtss_f32(x)
+            }
+        }
+        let mut rxy = _mm256_reduce_add_ps(xy);
+        let mut rxx = _mm256_reduce_add_ps(xx);
+        let mut ryy = _mm256_reduce_add_ps(yy);
+        while n > 0 {
+            let x = a.read().to_f32();
+            let y = b.read().to_f32();
+            a = a.add(1);
+            b = b.add(1);
+            n -= 1;
+            rxy += x * y;
+            rxx += x * x;
+            ryy += y * y;
+        }
+        F32(rxy / (rxx * ryy).sqrt())
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -295,10 +397,31 @@ pub fn cosine(lhs: &[F16], rhs: &[F16]) -> F32 {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4_avx512fp16")]
 unsafe fn dot_v4_avx512fp16(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_dot_avx512fp16(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm512_set1_ph(0.0);
+        while n >= 32 {
+            let x = _mm512_loadu_ph(a.cast());
+            let y = _mm512_loadu_ph(b.cast());
+            a = a.add(32);
+            b = b.add(32);
+            n -= 32;
+            xy = _mm512_fmadd_ph(x, y, xy);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFFFFFF, n);
+            let x = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, b.cast()));
+            xy = _mm512_fmadd_ph(x, y, xy);
+        }
+        F32(_mm512_reduce_add_ph(xy) as f32)
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -325,10 +448,32 @@ fn dot_v4_avx512fp16_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4")]
 unsafe fn dot_v4(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_dot_v4(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm512_set1_ps(0.0);
+
+        while n >= 16 {
+            let x = _mm512_cvtph_ps(_mm256_loadu_epi16(a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_loadu_epi16(b.cast()));
+            a = a.add(16);
+            b = b.add(16);
+            n -= 16;
+            xy = _mm512_fmadd_ps(x, y, xy);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFF, n) as u16;
+            let x = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, b.cast()));
+            xy = _mm512_fmadd_ps(x, y, xy);
+        }
+        F32(_mm512_reduce_add_ps(xy))
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -355,10 +500,44 @@ fn dot_v4_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v3")]
 unsafe fn dot_v3(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_dot_v3(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut xy = _mm256_set1_ps(0.0);
+        while n >= 8 {
+            let x = _mm256_cvtph_ps(_mm_loadu_epi16(a.cast()));
+            let y = _mm256_cvtph_ps(_mm_loadu_epi16(b.cast()));
+            a = a.add(8);
+            b = b.add(8);
+            n -= 8;
+            xy = _mm256_fmadd_ps(x, y, xy);
+        }
+        #[inline]
+        #[detect::target_cpu(enable = "v3")]
+        unsafe fn _mm256_reduce_add_ps(mut x: __m256) -> f32 {
+            unsafe {
+                x = _mm256_add_ps(x, _mm256_permute2f128_ps(x, x, 1));
+                x = _mm256_hadd_ps(x, x);
+                x = _mm256_hadd_ps(x, x);
+                _mm256_cvtss_f32(x)
+            }
+        }
+        let mut rxy = _mm256_reduce_add_ps(xy);
+        while n > 0 {
+            let x = a.read().to_f32();
+            let y = b.read().to_f32();
+            a = a.add(1);
+            b = b.add(1);
+            n -= 1;
+            rxy += x * y;
+        }
+        F32(rxy)
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -396,10 +575,33 @@ pub fn dot(lhs: &[F16], rhs: &[F16]) -> F32 {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4_avx512fp16")]
 unsafe fn sl2_v4_avx512fp16(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_sl2_avx512fp16(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut dd = _mm512_set1_ph(0.0);
+        while n >= 32 {
+            let x = _mm512_loadu_ph(a.cast());
+            let y = _mm512_loadu_ph(b.cast());
+            a = a.add(32);
+            b = b.add(32);
+            n -= 32;
+            let d = _mm512_sub_ph(x, y);
+            dd = _mm512_fmadd_ph(d, d, dd);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFFFFFF, n);
+            let x = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_castsi512_ph(_mm512_maskz_loadu_epi16(mask, b.cast()));
+            let d = _mm512_sub_ph(x, y);
+            dd = _mm512_fmadd_ph(d, d, dd);
+        }
+        F32(_mm512_reduce_add_ph(dd) as f32)
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -426,10 +628,33 @@ fn sl2_v4_avx512fp16_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v4")]
 unsafe fn sl2_v4(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_sl2_v4(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut dd = _mm512_set1_ps(0.0);
+        while n >= 16 {
+            let x = _mm512_cvtph_ps(_mm256_loadu_epi16(a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_loadu_epi16(b.cast()));
+            a = a.add(16);
+            b = b.add(16);
+            n -= 16;
+            let d = _mm512_sub_ps(x, y);
+            dd = _mm512_fmadd_ps(d, d, dd);
+        }
+        if n > 0 {
+            let mask = _bzhi_u32(0xFFFF, n) as u16;
+            let x = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, a.cast()));
+            let y = _mm512_cvtph_ps(_mm256_maskz_loadu_epi16(mask, b.cast()));
+            let d = _mm512_sub_ps(x, y);
+            dd = _mm512_fmadd_ps(d, d, dd);
+        }
+        F32(_mm512_reduce_add_ps(dd))
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]
@@ -456,10 +681,45 @@ fn sl2_v4_test() {
 
 #[inline]
 #[cfg(target_arch = "x86_64")]
+#[detect::target_cpu(enable = "v3")]
 unsafe fn sl2_v3(lhs: &[F16], rhs: &[F16]) -> F32 {
     assert!(lhs.len() == rhs.len());
-    let n = lhs.len();
-    unsafe { ccc::v_f16_sl2_v3(lhs.as_ptr().cast(), rhs.as_ptr().cast(), n).into() }
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut n = lhs.len() as u32;
+        let mut a = lhs.as_ptr();
+        let mut b = rhs.as_ptr();
+        let mut dd = _mm256_set1_ps(0.0);
+        while n >= 8 {
+            let x = _mm256_cvtph_ps(_mm_loadu_epi16(a.cast()));
+            let y = _mm256_cvtph_ps(_mm_loadu_epi16(b.cast()));
+            a = a.add(8);
+            b = b.add(8);
+            n -= 8;
+            let d = _mm256_sub_ps(x, y);
+            dd = _mm256_fmadd_ps(d, d, dd);
+        }
+        #[inline]
+        #[detect::target_cpu(enable = "v3")]
+        unsafe fn _mm256_reduce_add_ps(mut x: __m256) -> f32 {
+            unsafe {
+                x = _mm256_add_ps(x, _mm256_permute2f128_ps(x, x, 1));
+                x = _mm256_hadd_ps(x, x);
+                x = _mm256_hadd_ps(x, x);
+                _mm256_cvtss_f32(x)
+            }
+        }
+        let mut rdd = _mm256_reduce_add_ps(dd);
+        while n > 0 {
+            let x = a.read().to_f32();
+            let y = b.read().to_f32();
+            a = a.add(1);
+            b = b.add(1);
+            n -= 1;
+            rdd += (x - y) * (x - y);
+        }
+        F32(rdd)
+    }
 }
 
 #[cfg(all(target_arch = "x86_64", test))]

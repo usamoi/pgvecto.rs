@@ -1,6 +1,7 @@
 use crate::OperatorIndexing;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::search::*;
 use flat::Flat;
 use hnsw::Hnsw;
@@ -31,6 +32,7 @@ pub enum SealedIndexing<O: OperatorIndexing> {
 
 impl<O: OperatorIndexing> SealedIndexing<O> {
     pub fn create(
+        parallelism: &impl Parallelism,
         path: impl AsRef<Path>,
         options: IndexOptions,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
@@ -39,43 +41,43 @@ impl<O: OperatorIndexing> SealedIndexing<O> {
             IndexingOptions::Flat(FlatIndexingOptions {
                 ref quantization, ..
             }) => match quantization {
-                None => Self::Flat(Flat::create(path, options, source)),
+                None => Self::Flat(Flat::create(parallelism, path, options, source)),
                 Some(QuantizationOptions::Scalar(_)) => {
-                    Self::FlatSq(Flat::create(path, options, source))
+                    Self::FlatSq(Flat::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Product(_)) => {
-                    Self::FlatPq(Flat::create(path, options, source))
+                    Self::FlatPq(Flat::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Rabitq(_)) => {
-                    Self::FlatRq(Flat::create(path, options, source))
+                    Self::FlatRq(Flat::create(parallelism, path, options, source))
                 }
             },
             IndexingOptions::Ivf(IvfIndexingOptions {
                 ref quantization, ..
             }) => match quantization {
-                None => Self::Ivf(Ivf::create(path, options, source)),
+                None => Self::Ivf(Ivf::create(parallelism, path, options, source)),
                 Some(QuantizationOptions::Scalar(_)) => {
-                    Self::IvfSq(Ivf::create(path, options, source))
+                    Self::IvfSq(Ivf::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Product(_)) => {
-                    Self::IvfPq(Ivf::create(path, options, source))
+                    Self::IvfPq(Ivf::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Rabitq(_)) => {
-                    Self::IvfRq(Ivf::create(path, options, source))
+                    Self::IvfRq(Ivf::create(parallelism, path, options, source))
                 }
             },
             IndexingOptions::Hnsw(HnswIndexingOptions {
                 ref quantization, ..
             }) => match quantization {
-                None => Self::Hnsw(Hnsw::create(path, options, source)),
+                None => Self::Hnsw(Hnsw::create(parallelism, path, options, source)),
                 Some(QuantizationOptions::Scalar(_)) => {
-                    Self::HnswSq(Hnsw::create(path, options, source))
+                    Self::HnswSq(Hnsw::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Product(_)) => {
-                    Self::HnswPq(Hnsw::create(path, options, source))
+                    Self::HnswPq(Hnsw::create(parallelism, path, options, source))
                 }
                 Some(QuantizationOptions::Rabitq(_)) => {
-                    Self::HnswRq(Hnsw::create(path, options, source))
+                    Self::HnswRq(Hnsw::create(parallelism, path, options, source))
                 }
             },
             IndexingOptions::SparseInvertedIndex(_) => {

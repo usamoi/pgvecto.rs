@@ -6,6 +6,7 @@ pub mod operator;
 use base::always_equal::AlwaysEqual;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::search::*;
 use base::vector::VectorBorrowed;
 use base::vector::VectorOwned;
@@ -19,11 +20,8 @@ use k_means::k_means_lookup_many;
 use operator::OperatorIvf as Op;
 use quantization::quantizer::Quantizer;
 use quantization::Quantization;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
 use std::fs::create_dir;
 use std::path::Path;
-use stoppable_rayon as rayon;
 use storage::Storage;
 
 pub struct Ivf<O: Op, Q: Quantizer<O>> {
@@ -37,12 +35,13 @@ pub struct Ivf<O: Op, Q: Quantizer<O>> {
 
 impl<O: Op, Q: Quantizer<O>> Ivf<O, Q> {
     pub fn create(
+        parallelism: &impl Parallelism,
         path: impl AsRef<Path>,
         options: IndexOptions,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
     ) -> Self {
         let remapped = RemappedCollection::from_source(source);
-        from_nothing(path, options, &remapped)
+        from_nothing(parallelism, path, options, &remapped)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Self {
@@ -120,6 +119,7 @@ impl<O: Op, Q: Quantizer<O>> Ivf<O, Q> {
 }
 
 fn from_nothing<O: Op, Q: Quantizer<O>>(
+    parallelism: &impl Parallelism,
     path: impl AsRef<Path>,
     options: IndexOptions,
     collection: &(impl Vectors<O::Vector> + Collection + Sync),
@@ -132,15 +132,22 @@ fn from_nothing<O: Op, Q: Quantizer<O>>(
         quantization: quantization_options,
     } = options.indexing.clone().unwrap_ivf();
     let samples = O::sample(collection, nlist);
-    rayon::check();
-    let centroids = k_means(nlist as usize, samples, spherical_centroids, 10, false);
-    rayon::check();
-    let fa = (0..collection.len())
-        .into_par_iter()
+    parallelism.check();
+    let centroids = k_means(
+        parallelism,
+        nlist as usize,
+        samples,
+        spherical_centroids,
+        10,
+        false,
+    );
+    parallelism.check();
+    let fa = parallelism
+        .into_par_iter(0..collection.len())
         .map(|i| k_means_lookup(O::interpret(collection.vector(i)), &centroids))
         .collect::<Vec<_>>();
-    let ls = (0..collection.len())
-        .into_par_iter()
+    let ls = parallelism
+        .into_par_iter(0..collection.len())
         .fold(
             || vec![Vec::new(); nlist as usize],
             |mut state, i| {
@@ -170,9 +177,10 @@ fn from_nothing<O: Op, Q: Quantizer<O>>(
         .collect::<Vec<_>>();
     let collection = RemappedCollection::from_collection(collection, remap);
     let is_residual = residual_quantization && O::SUPPORT_RESIDUAL;
-    rayon::check();
+    parallelism.check();
     let storage = O::Storage::create(path.as_ref().join("storage"), &collection);
     let quantization = Quantization::<O, Q>::create(
+        parallelism,
         path.as_ref().join("quantization"),
         options.vector,
         quantization_options,

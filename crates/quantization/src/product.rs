@@ -12,6 +12,7 @@ use base::always_equal::AlwaysEqual;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::scalar::impossible::Impossible;
 use base::scalar::ScalarLike;
 use base::search::*;
@@ -20,12 +21,10 @@ use base::vector::VectorOwned;
 use common::sample::sample;
 use common::vec2::Vec2;
 use k_means::k_means;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::ops::Range;
-use stoppable_rayon as rayon;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -39,6 +38,7 @@ pub struct ProductQuantizer<O: OperatorProductQuantization> {
 
 impl<O: OperatorProductQuantization> Quantizer<O> for ProductQuantizer<O> {
     fn train(
+        parallelism: &impl Parallelism,
         vector_options: VectorOptions,
         options: Option<QuantizationOptions>,
         vectors: &(impl Vectors<O::Vector> + Sync),
@@ -52,8 +52,8 @@ impl<O: OperatorProductQuantization> Quantizer<O> for ProductQuantizer<O> {
         };
         let ratio = options.ratio;
         let bits = options.bits;
-        let points = (0..dims.div_ceil(ratio))
-            .into_par_iter()
+        let points = parallelism
+            .into_par_iter(0..dims.div_ceil(ratio))
             .map(|p| {
                 let subdims = std::cmp::min(ratio, dims - ratio * p);
                 let start = p * ratio;
@@ -66,7 +66,7 @@ impl<O: OperatorProductQuantization> Quantizer<O> for ProductQuantizer<O> {
                     )
                     .to_vec()
                 });
-                k_means(1 << bits, subsamples, false, 25, true)
+                k_means(parallelism, 1 << bits, subsamples, false, 25, true)
             })
             .collect::<Vec<_>>();
         let mut centroids = Vec2::zeros((1 << bits, dims as usize));

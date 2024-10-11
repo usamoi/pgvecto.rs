@@ -3,6 +3,7 @@
 use base::always_equal::AlwaysEqual;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::search::*;
 use base::vector::VectorBorrowed;
 use base::vector::VectorOwned;
@@ -27,12 +28,13 @@ pub struct Flat<O: OperatorFlat, Q: Quantizer<O>> {
 
 impl<O: OperatorFlat, Q: Quantizer<O>> Flat<O, Q> {
     pub fn create(
+        parallelism: &impl Parallelism,
         path: impl AsRef<Path>,
         options: IndexOptions,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
     ) -> Self {
         let remapped = RemappedCollection::from_source(source);
-        from_nothing(path, options, &remapped)
+        from_nothing(parallelism, path, options, &remapped)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Self {
@@ -81,6 +83,7 @@ impl<O: OperatorFlat, Q: Quantizer<O>> Flat<O, Q> {
 }
 
 fn from_nothing<O: OperatorFlat, Q: Quantizer<O>>(
+    parallelism: &impl Parallelism,
     path: impl AsRef<Path>,
     options: IndexOptions,
     collection: &(impl Vectors<O::Vector> + Collection + Sync),
@@ -89,6 +92,7 @@ fn from_nothing<O: OperatorFlat, Q: Quantizer<O>>(
     let flat_indexing_options = options.indexing.clone().unwrap_flat();
     let storage = O::Storage::create(path.as_ref().join("storage"), collection);
     let quantization = Quantization::<O, Q>::create(
+        parallelism,
         path.as_ref().join("quantization"),
         options.vector,
         flat_indexing_options.quantization,

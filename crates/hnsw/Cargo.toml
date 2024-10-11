@@ -12,7 +12,6 @@ common = { path = "../common" }
 graph = { path = "../graph" }
 log.workspace = true
 quantization = { path = "../quantization" }
-stoppable_rayon = { path = "../stoppable_rayon" }
 storage = { path = "../storage" }
 
 [lints]

@@ -12,6 +12,7 @@ pub mod always_equal;
 pub mod distance;
 pub mod index;
 pub mod operator;
+pub mod parallelism;
 pub mod pod;
 pub mod rand;
 pub mod scalar;

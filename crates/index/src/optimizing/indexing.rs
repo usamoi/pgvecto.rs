@@ -1,3 +1,5 @@
+use base::parallelism::Parallelism;
+
 use crate::optimizing::index_source::IndexSource;
 use crate::Index;
 use crate::Op;
@@ -86,8 +88,13 @@ pub fn scan<O: Op>(
     ))
 }
 
-pub fn make<O: Op>(index: Arc<Index<O>>, source: IndexSource<O::Vector, O>) {
+pub fn make<O: Op>(
+    parallelism: &impl Parallelism,
+    index: Arc<Index<O>>,
+    source: IndexSource<O::Vector, O>,
+) {
     let _ = index.create_sealed_segment(
+        parallelism,
         &source,
         &source.sealed.iter().map(|x| x.id()).collect::<Vec<_>>(),
         &source.growing.iter().map(|x| x.id()).collect::<Vec<_>>(),

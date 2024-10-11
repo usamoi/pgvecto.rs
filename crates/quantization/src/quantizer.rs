@@ -2,6 +2,7 @@ use base::distance::Distance;
 use base::index::{QuantizationOptions, SearchOptions, VectorOptions};
 use base::operator::Borrowed;
 use base::operator::Operator;
+use base::parallelism::Parallelism;
 use base::search::{RerankerPop, RerankerPush, Vectors};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
@@ -10,6 +11,7 @@ pub trait Quantizer<O: Operator>:
     Serialize + for<'a> Deserialize<'a> + Send + Sync + 'static
 {
     fn train(
+        parallelism: &impl Parallelism,
         vector_options: VectorOptions,
         options: Option<QuantizationOptions>,
         vectors: &(impl Vectors<O::Vector> + Sync),

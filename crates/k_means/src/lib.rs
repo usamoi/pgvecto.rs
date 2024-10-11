@@ -4,13 +4,14 @@ pub mod kmeans1d;
 pub mod lloyd;
 pub mod quick_centers;
 
+use base::parallelism::Parallelism;
 use base::scalar::*;
 use common::vec2::Vec2;
 use kmeans1d::kmeans1d;
 use lloyd::LloydKMeans;
-use stoppable_rayon as rayon;
 
 pub fn k_means<S: ScalarLike>(
+    parallelism: &impl Parallelism,
     c: usize,
     mut samples: Vec2<S>,
     is_spherical: bool,
@@ -36,9 +37,10 @@ pub fn k_means<S: ScalarLike>(
         let centroids = S::vector_from_f32(&kmeans1d(c, samples.as_slice()));
         return Vec2::from_vec((c, 1), centroids);
     }
-    let mut lloyd_k_means = LloydKMeans::new(c, samples, is_spherical, prefer_kmeanspp);
+    let mut lloyd_k_means =
+        LloydKMeans::new(parallelism, c, samples, is_spherical, prefer_kmeanspp);
     for _ in 0..iterations {
-        rayon::check();
+        parallelism.check();
         if lloyd_k_means.iterate() {
             break;
         }

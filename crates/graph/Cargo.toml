@@ -9,7 +9,6 @@ rand.workspace = true
 
 base = { path = "../base" }
 common = { path = "../common" }
-stoppable_rayon = { path = "../stoppable_rayon" }
 
 [lints]
 workspace = true

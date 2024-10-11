@@ -1,10 +1,13 @@
 use base::distance::{Distance, DistanceKind};
 use base::index::{IndexOptions, SearchOptions};
 use base::operator::*;
+use base::parallelism::RayonParallelism;
 use base::search::{Collection, Element, Pointer, Source, Vectors};
 use base::vector::*;
 use half::f16;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 #[allow(dead_code)]
 pub enum Indexing {
@@ -28,46 +31,42 @@ impl Indexing {
         let path = path.as_ref();
         match (index_options.vector.v, index_options.vector.d) {
             (VectorKind::Vecf32, DistanceKind::L2) => Self::Vecf32L2(
-                stoppable_rayon::ThreadPoolBuilder::new()
-                    .build_scoped(|pool| {
-                        pool.install(|| {
-                            let x = indexing::SealedIndexing::create(
-                                &path,
-                                index_options.clone(),
-                                &source,
-                            );
-                            // write options
-                            std::fs::write(
-                                path.join(".index_options"),
-                                serde_json::to_string(&index_options).unwrap(),
-                            )
-                            .unwrap();
-                            x
-                        })
-                    })
-                    .unwrap()
-                    .unwrap(),
+                RayonParallelism::scoped(16, Arc::new(AtomicBool::new(false)), |parallelism| {
+                    let x = indexing::SealedIndexing::create(
+                        parallelism,
+                        &path,
+                        index_options.clone(),
+                        &source,
+                    );
+                    // write options
+                    std::fs::write(
+                        path.join(".index_options"),
+                        serde_json::to_string(&index_options).unwrap(),
+                    )
+                    .unwrap();
+                    x
+                })
+                .unwrap()
+                .unwrap(),
             ),
             (VectorKind::Vecf32, DistanceKind::Dot) => Self::Vecf32Dot(
-                stoppable_rayon::ThreadPoolBuilder::new()
-                    .build_scoped(|pool| {
-                        pool.install(|| {
-                            let x = indexing::SealedIndexing::create(
-                                &path,
-                                index_options.clone(),
-                                &source,
-                            );
-                            // write options
-                            std::fs::write(
-                                path.join(".index_options"),
-                                serde_json::to_string(&index_options).unwrap(),
-                            )
-                            .unwrap();
-                            x
-                        })
-                    })
-                    .unwrap()
-                    .unwrap(),
+                RayonParallelism::scoped(16, Arc::new(AtomicBool::new(false)), |parallelism| {
+                    let x = indexing::SealedIndexing::create(
+                        parallelism,
+                        &path,
+                        index_options.clone(),
+                        &source,
+                    );
+                    // write options
+                    std::fs::write(
+                        path.join(".index_options"),
+                        serde_json::to_string(&index_options).unwrap(),
+                    )
+                    .unwrap();
+                    x
+                })
+                .unwrap()
+                .unwrap(),
             ),
             _ => unimplemented!(),
         }

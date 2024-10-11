@@ -3,6 +3,7 @@ use crate::IndexTracker;
 use crate::Op;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::search::*;
 use crossbeam::atomic::AtomicCell;
 use indexing::SealedIndexing;
@@ -33,13 +34,14 @@ impl<O: Op> Debug for SealedSegment<O> {
 
 impl<O: Op> SealedSegment<O> {
     pub fn create(
+        parallelism: &impl Parallelism,
         index_tracker: Arc<IndexTracker>,
         path: PathBuf,
         id: NonZeroU128,
         options: IndexOptions,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
     ) -> Arc<Self> {
-        let indexing = SealedIndexing::create(&path, options, source);
+        let indexing = SealedIndexing::create(parallelism, &path, options, source);
         Arc::new(Self {
             id,
             path: path.clone(),

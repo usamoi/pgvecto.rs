@@ -16,7 +16,6 @@ base = { path = "../base" }
 common = { path = "../common" }
 detect = { path = "../detect" }
 k_means = { path = "../k_means" }
-stoppable_rayon = { path = "../stoppable_rayon" }
 
 [lints]
 workspace = true

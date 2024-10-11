@@ -1,13 +1,12 @@
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::scalar::*;
 use common::vec2::Vec2;
 use half::f16;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use rayon::iter::IntoParallelRefMutIterator;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use stoppable_rayon as rayon;
 
-pub struct LloydKMeans<S> {
+pub struct LloydKMeans<'a, P, S> {
+    parallelism: &'a P,
     dims: usize,
     c: usize,
     is_spherical: bool,
@@ -19,8 +18,14 @@ pub struct LloydKMeans<S> {
 
 const DELTA: f32 = f16::EPSILON.to_f32_const();
 
-impl<S: ScalarLike> LloydKMeans<S> {
-    pub fn new(c: usize, samples: Vec2<S>, is_spherical: bool, prefer_kmeanspp: bool) -> Self {
+impl<'a, P: Parallelism, S: ScalarLike> LloydKMeans<'a, P, S> {
+    pub fn new(
+        parallelism: &'a P,
+        c: usize,
+        samples: Vec2<S>,
+        is_spherical: bool,
+        prefer_kmeanspp: bool,
+    ) -> Self {
         let n = samples.shape_0();
         let dims = samples.shape_1();
 
@@ -31,8 +36,8 @@ impl<S: ScalarLike> LloydKMeans<S> {
             centroids.push(samples[(rng.gen_range(0..n),)].to_vec());
             let mut weight = vec![f32::INFINITY; n];
             for i in 1..c {
-                let dis_2 = (0..n)
-                    .into_par_iter()
+                let dis_2 = parallelism
+                    .into_par_iter(0..n)
                     .map(|j| S::reduce_sum_of_d2(&samples[(j,)], &centroids[i - 1]))
                     .collect::<Vec<_>>();
                 for j in 0..n {
@@ -59,8 +64,8 @@ impl<S: ScalarLike> LloydKMeans<S> {
             }
         }
 
-        let assign = (0..n)
-            .into_par_iter()
+        let assign = parallelism
+            .into_par_iter(0..n)
             .map(|i| {
                 let mut result = (f32::INFINITY, 0);
                 for j in 0..c {
@@ -74,6 +79,7 @@ impl<S: ScalarLike> LloydKMeans<S> {
             .collect::<Vec<_>>();
 
         Self {
+            parallelism,
             dims,
             c,
             is_spherical,
@@ -91,8 +97,9 @@ impl<S: ScalarLike> LloydKMeans<S> {
         let samples = &self.samples;
         let n = samples.shape_0();
 
-        let (sum, mut count) = (0..n)
-            .into_par_iter()
+        let (sum, mut count) = self
+            .parallelism
+            .into_par_iter(0..n)
             .fold(
                 || (vec![vec![S::zero(); dims]; c], vec![0.0f32; c]),
                 |(mut sum, mut count), i| {
@@ -112,8 +119,9 @@ impl<S: ScalarLike> LloydKMeans<S> {
                 },
             );
 
-        let mut centroids = (0..c)
-            .into_par_iter()
+        let mut centroids = self
+            .parallelism
+            .into_par_iter(0..c)
             .map(|i| S::vector_mul_scalar(&sum[i], 1.0 / count[i]))
             .collect::<Vec<_>>();
 
@@ -138,14 +146,17 @@ impl<S: ScalarLike> LloydKMeans<S> {
         }
 
         if self.is_spherical {
-            centroids.par_iter_mut().for_each(|centroid| {
-                let l = S::reduce_sum_of_x2(centroid).sqrt();
-                S::vector_mul_scalar_inplace(centroid, 1.0 / l);
-            });
+            self.parallelism
+                .into_par_iter(&mut centroids)
+                .for_each(|centroid| {
+                    let l = S::reduce_sum_of_x2(centroid).sqrt();
+                    S::vector_mul_scalar_inplace(centroid, 1.0 / l);
+                });
         }
 
-        let assign = (0..n)
-            .into_par_iter()
+        let assign = self
+            .parallelism
+            .into_par_iter(0..n)
             .map(|i| {
                 let mut result = (f32::INFINITY, 0);
                 for j in 0..c {

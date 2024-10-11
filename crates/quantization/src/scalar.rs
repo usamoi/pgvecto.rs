@@ -12,20 +12,18 @@ use base::always_equal::AlwaysEqual;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::scalar::impossible::Impossible;
 use base::scalar::ScalarLike;
 use base::search::RerankerPop;
 use base::search::RerankerPush;
 use base::search::Vectors;
 use base::vector::*;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::marker::PhantomData;
 use std::ops::Range;
-use stoppable_rayon as rayon;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -39,6 +37,7 @@ pub struct ScalarQuantizer<O: OperatorScalarQuantization> {
 
 impl<O: OperatorScalarQuantization> Quantizer<O> for ScalarQuantizer<O> {
     fn train(
+        parallelism: &impl Parallelism,
         vector_options: VectorOptions,
         options: Option<QuantizationOptions>,
         vectors: &(impl Vectors<O::Vector> + Sync),
@@ -52,8 +51,8 @@ impl<O: OperatorScalarQuantization> Quantizer<O> for ScalarQuantizer<O> {
         let dims = vector_options.dims;
         let bits = options.bits;
         let n = vectors.len();
-        let (min, max) = (0..n)
-            .into_par_iter()
+        let (min, max) = parallelism
+            .into_par_iter(0..n)
             .fold(
                 || {
                     (

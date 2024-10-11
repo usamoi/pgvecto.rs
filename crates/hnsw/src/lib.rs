@@ -5,6 +5,7 @@ use base::always_equal::AlwaysEqual;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::search::*;
 use base::vector::VectorBorrowed;
 use base::vector::VectorOwned;
@@ -15,13 +16,11 @@ use graph::visited::VisitedPool;
 use parking_lot::RwLock;
 use quantization::quantizer::Quantizer;
 use quantization::Quantization;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::fs::create_dir;
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use stoppable_rayon as rayon;
 use storage::OperatorStorage;
 use storage::Storage;
 
@@ -44,6 +43,7 @@ pub struct Hnsw<O: OperatorHnsw, Q: Quantizer<O>> {
 
 impl<O: OperatorHnsw, Q: Quantizer<O>> Hnsw<O, Q> {
     pub fn create(
+        parallelism: &impl Parallelism,
         path: impl AsRef<Path>,
         options: IndexOptions,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
@@ -51,12 +51,12 @@ impl<O: OperatorHnsw, Q: Quantizer<O>> Hnsw<O, Q> {
         let remapped = RemappedCollection::from_source(source);
         if let Some(main) = source.get_main::<Self>() {
             if remapped.barrier() != 0 {
-                from_main(path, options, &remapped, main)
+                from_main(parallelism, path, options, &remapped, main)
             } else {
-                from_nothing(path, options, &remapped)
+                from_nothing(parallelism, path, options, &remapped)
             }
         } else {
-            from_nothing(path, options, &remapped)
+            from_nothing(parallelism, path, options, &remapped)
         }
     }
 
@@ -114,6 +114,7 @@ impl<O: OperatorHnsw, Q: Quantizer<O>> Hnsw<O, Q> {
 }
 
 fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
+    parallelism: &impl Parallelism,
     path: impl AsRef<Path>,
     options: IndexOptions,
     collection: &(impl Vectors<O::Vector> + Collection + Sync),
@@ -126,6 +127,7 @@ fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
     } = options.indexing.clone().unwrap_hnsw();
     let mut g = fresh(collection.len(), m);
     patch_insertions(
+        parallelism,
         |u, v| O::distance(collection.vector(u), collection.vector(v)),
         |_| false,
         collection.len(),
@@ -133,37 +135,38 @@ fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
         m,
         &mut g,
     );
-    rayon::check();
+    parallelism.check();
     finish(&mut g, m);
     let storage = O::Storage::create(path.as_ref().join("storage"), collection);
-    rayon::check();
+    parallelism.check();
     let quantization = Quantization::<O, Q>::create(
+        parallelism,
         path.as_ref().join("quantization"),
         options.vector,
         quantization_options,
         collection,
         |vector| vector.own(),
     );
-    rayon::check();
+    parallelism.check();
     let payloads = MmapArray::create(
         path.as_ref().join("payloads"),
         (0..collection.len()).map(|i| collection.payload(i)),
     );
-    rayon::check();
+    parallelism.check();
     let base_graph_outs = MmapArray::create(
         path.as_ref().join("base_graph_outs"),
         g.iter_mut()
             .flat_map(|u| u[0].get_mut())
             .map(|&mut (_0, _1)| _1),
     );
-    rayon::check();
+    parallelism.check();
     let base_graph_weights = MmapArray::create(
         path.as_ref().join("base_graph_weights"),
         g.iter_mut()
             .flat_map(|u| u[0].get_mut())
             .map(|&mut (_0, _1)| _0),
     );
-    rayon::check();
+    parallelism.check();
     let hyper_graph_outs = MmapArray::create(
         path.as_ref().join("hyper_graph_outs"),
         g.iter_mut()
@@ -171,7 +174,7 @@ fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
             .flat_map(|l| l.get_mut())
             .map(|&mut (_0, _1)| _1),
     );
-    rayon::check();
+    parallelism.check();
     let hyper_graph_weights = MmapArray::create(
         path.as_ref().join("hyper_graph_weights"),
         g.iter_mut()
@@ -179,7 +182,7 @@ fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
             .flat_map(|l| l.get_mut())
             .map(|&mut (_0, _1)| _0),
     );
-    rayon::check();
+    parallelism.check();
     let m = Json::create(path.as_ref().join("m"), m);
     Hnsw {
         storage,
@@ -196,6 +199,7 @@ fn from_nothing<O: OperatorHnsw, Q: Quantizer<O>>(
 }
 
 fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
+    parallelism: &impl Parallelism,
     path: impl AsRef<Path>,
     options: IndexOptions,
     remapped: &RemappedCollection<O::Vector, impl Vectors<O::Vector> + Collection + Sync>,
@@ -209,6 +213,7 @@ fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
     } = options.indexing.clone().unwrap_hnsw();
     let mut g = fresh(remapped.len(), m);
     patch_deletions(
+        parallelism,
         |u, v| O::distance(remapped.vector(u), remapped.vector(v)),
         |u| remapped.skip(u),
         |u, level| {
@@ -222,8 +227,9 @@ fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
         m,
         &mut g,
     );
-    rayon::check();
+    parallelism.check();
     patch_insertions(
+        parallelism,
         |u, v| O::distance(remapped.vector(u), remapped.vector(v)),
         |u| remapped.skip(u),
         remapped.len(),
@@ -231,37 +237,38 @@ fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
         m,
         &mut g,
     );
-    rayon::check();
+    parallelism.check();
     finish(&mut g, m);
     let storage = O::Storage::create(path.as_ref().join("storage"), remapped);
-    rayon::check();
+    parallelism.check();
     let quantization = Quantization::<O, Q>::create(
+        parallelism,
         path.as_ref().join("quantization"),
         options.vector,
         quantization_options,
         remapped,
         |vector| vector.own(),
     );
-    rayon::check();
+    parallelism.check();
     let payloads = MmapArray::create(
         path.as_ref().join("payloads"),
         (0..remapped.len()).map(|i| remapped.payload(i)),
     );
-    rayon::check();
+    parallelism.check();
     let base_graph_outs = MmapArray::create(
         path.as_ref().join("base_graph_outs"),
         g.iter_mut()
             .flat_map(|u| u[0].get_mut())
             .map(|&mut (_0, _1)| _1),
     );
-    rayon::check();
+    parallelism.check();
     let base_graph_weights = MmapArray::create(
         path.as_ref().join("base_graph_weights"),
         g.iter_mut()
             .flat_map(|u| u[0].get_mut())
             .map(|&mut (_0, _1)| _0),
     );
-    rayon::check();
+    parallelism.check();
     let hyper_graph_outs = MmapArray::create(
         path.as_ref().join("hyper_graph_outs"),
         g.iter_mut()
@@ -269,7 +276,7 @@ fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
             .flat_map(|l| l.get_mut())
             .map(|&mut (_0, _1)| _1),
     );
-    rayon::check();
+    parallelism.check();
     let hyper_graph_weights = MmapArray::create(
         path.as_ref().join("hyper_graph_weights"),
         g.iter_mut()
@@ -277,9 +284,9 @@ fn from_main<O: OperatorHnsw, Q: Quantizer<O>>(
             .flat_map(|l| l.get_mut())
             .map(|&mut (_0, _1)| _0),
     );
-    rayon::check();
+    parallelism.check();
     let m = Json::create(path.as_ref().join("m"), m);
-    rayon::check();
+    parallelism.check();
     Hnsw {
         storage,
         quantization,
@@ -357,6 +364,7 @@ fn fresh(n: u32, m: u32) -> Vec<Vec<RwLock<Vec<(Distance, u32)>>>> {
 }
 
 fn patch_deletions<E>(
+    parallelism: &impl Parallelism,
     dist: impl Fn(u32, u32) -> Distance + Copy + Sync,
     skip: impl Fn(u32) -> bool + Sync,
     read_edges: impl Fn(u32, u8) -> E + Sync,
@@ -366,8 +374,8 @@ fn patch_deletions<E>(
 ) where
     E: Iterator<Item = (Distance, u32)>,
 {
-    (0..n).into_par_iter().for_each(|u| {
-        rayon::check();
+    parallelism.into_par_iter(0..n).for_each(|u| {
+        parallelism.check();
         if !skip(u) {
             return;
         }
@@ -390,6 +398,7 @@ fn patch_deletions<E>(
 }
 
 fn patch_insertions(
+    parallelism: &impl Parallelism,
     dist: impl Fn(u32, u32) -> Distance + Copy + Sync,
     skip: impl Fn(u32) -> bool + Sync,
     n: u32,
@@ -455,8 +464,8 @@ fn patch_insertions(
         .into_u64(),
     );
     let visited = VisitedPool::new(n);
-    (0..n).into_par_iter().for_each(|u| {
-        rayon::check();
+    parallelism.into_par_iter(0..n).for_each(|u| {
+        parallelism.check();
         if skip(u) {
             return;
         }
@@ -465,7 +474,7 @@ fn patch_insertions(
         let mut start = Start::from_u64(s.load(Ordering::Acquire));
         let update_start = loop {
             if start.is_holding() {
-                rayon::check();
+                parallelism.check();
                 std::thread::yield_now();
                 continue;
             }

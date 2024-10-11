@@ -18,17 +18,15 @@ pub mod utils;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::{ParallelIterator, Parallelism};
 use base::search::*;
 use base::vector::VectorOwned;
 use common::json::Json;
 use common::mmap_array::MmapArray;
 use quantizer::Quantizer;
-use rayon::iter::IntoParallelIterator;
-use rayon::iter::ParallelIterator;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::path::Path;
-use stoppable_rayon as rayon;
 
 pub struct Quantization<O, Q> {
     quantizer: Json<Q>,
@@ -39,6 +37,7 @@ pub struct Quantization<O, Q> {
 
 impl<O: Operator, Q: Quantizer<O>> Quantization<O, Q> {
     pub fn create(
+        parallelism: &impl Parallelism,
         path: impl AsRef<Path>,
         vector_options: VectorOptions,
         quantization_options: Option<QuantizationOptions>,
@@ -48,11 +47,17 @@ impl<O: Operator, Q: Quantizer<O>> Quantization<O, Q> {
         std::fs::create_dir(path.as_ref()).unwrap();
         let quantizer = Json::create(
             path.as_ref().join("quantizer"),
-            Q::train(vector_options, quantization_options, vectors, transform),
+            Q::train(
+                parallelism,
+                vector_options,
+                quantization_options,
+                vectors,
+                transform,
+            ),
         );
         let codes = MmapArray::create(path.as_ref().join("codes"), {
-            (0..vectors.len())
-                .into_par_iter()
+            parallelism
+                .into_par_iter(0..vectors.len())
                 .map(|i| {
                     let vector = quantizer.project(transform(vectors.vector(i)).as_borrowed());
                     quantizer.encode(vector.as_borrowed())
@@ -66,8 +71,8 @@ impl<O: Operator, Q: Quantizer<O>> Quantization<O, Q> {
             let n = vectors.len();
             let m = n.div_ceil(32);
             let train = &quantizer;
-            (0..m)
-                .into_par_iter()
+            parallelism
+                .into_par_iter(0..m)
                 .map(move |alpha| {
                     let vectors = std::array::from_fn(|beta| {
                         let i = 32 * alpha + beta as u32;

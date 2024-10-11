@@ -15,6 +15,7 @@ use arc_swap::ArcSwap;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::search::*;
 use base::vector::*;
 use common::clean::clean;
@@ -316,6 +317,7 @@ impl<O: Op> Index<O> {
     }
     pub fn create_sealed_segment(
         &self,
+        parallelism: &impl Parallelism,
         source: &(impl Vectors<O::Vector> + Collection + Source + Sync),
         sealed_segment_ids: &[NonZeroU128],
         growing_segment_ids: &[NonZeroU128],
@@ -328,6 +330,7 @@ impl<O: Op> Index<O> {
             protect.maintain(self.options.clone(), self.delete.clone(), &self.view);
         }
         let next = SealedSegment::create(
+            parallelism,
             self._tracker.clone(),
             self.path.join("sealed_segments").join(id.to_string()),
             id,

@@ -7,6 +7,7 @@ use crate::Op;
 use crossbeam::channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -64,36 +65,42 @@ impl<O: Op> Optimizing<O> {
                     view.alterable_options.segment.max_sealed_segment_size,
                     view.alterable_options.optimizing.delete_threshold,
                 ) {
-                    stoppable_rayon::ThreadPoolBuilder::new()
-                        .num_threads(view.alterable_options.optimizing.optimizing_threads as usize)
-                        .build_scoped(|pool| {
-                            let (stop_tx, stop_rx) = bounded::<Infallible>(0);
-                            std::thread::scope(|scope| {
-                                scope.spawn(|| {
-                                    let stop_rx = stop_rx;
-                                    loop {
-                                        match stop_rx.try_recv() {
-                                            Ok(never) => match never {},
-                                            Err(TryRecvError::Empty) => (),
-                                            Err(TryRecvError::Disconnected) => return,
-                                        }
-                                        match shutdown.recv_timeout(Duration::from_secs(1)) {
-                                            Ok(never) => match never {},
-                                            Err(RecvTimeoutError::Timeout) => (),
-                                            Err(RecvTimeoutError::Disconnected) => {
-                                                pool.stop();
-                                                return;
-                                            }
+                    let index = index.clone();
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let shutdown = &shutdown;
+                    std::thread::scope(move |scope| {
+                        let (stop_tx, stop_rx) = bounded::<Infallible>(0);
+                        scope.spawn({
+                            let stop = stop.clone();
+                            move || {
+                                let stop_rx = stop_rx;
+                                loop {
+                                    match stop_rx.try_recv() {
+                                        Ok(never) => match never {},
+                                        Err(TryRecvError::Empty) => (),
+                                        Err(TryRecvError::Disconnected) => return,
+                                    }
+                                    match shutdown.recv_timeout(Duration::from_secs(1)) {
+                                        Ok(never) => match never {},
+                                        Err(RecvTimeoutError::Timeout) => (),
+                                        Err(RecvTimeoutError::Disconnected) => {
+                                            use std::sync::atomic::Ordering;
+                                            stop.store(true, Ordering::Relaxed);
+                                            return;
                                         }
                                     }
-                                });
-                                scope.spawn(|| {
-                                    let _stop_tx = stop_tx;
-                                    pool.install(|| make(index.clone(), source));
-                                });
-                            })
-                        })
-                        .unwrap();
+                                }
+                            }
+                        });
+                        scope.spawn(move || {
+                            let _stop_tx = stop_tx;
+                            base::parallelism::RayonParallelism::scoped(
+                                view.alterable_options.optimizing.optimizing_threads as usize,
+                                stop.clone(),
+                                |parallelism| make(parallelism, index.clone(), source),
+                            )
+                        });
+                    });
                     Instant::now()
                 } else {
                     index.instant_indexed.store(Instant::now());

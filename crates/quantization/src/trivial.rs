@@ -4,6 +4,7 @@ use base::always_equal::AlwaysEqual;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::search::*;
 use base::vector::VectorBorrowed;
 use base::vector::VectorOwned;
@@ -22,6 +23,7 @@ pub struct TrivialQuantizer<O: Operator> {
 
 impl<O: Operator> Quantizer<O> for TrivialQuantizer<O> {
     fn train(
+        _: &impl Parallelism,
         _: VectorOptions,
         _: Option<QuantizationOptions>,
         _: &impl Vectors<O::Vector>,

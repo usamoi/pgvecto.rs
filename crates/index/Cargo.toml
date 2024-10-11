@@ -21,7 +21,6 @@ validator.workspace = true
 base = { path = "../base" }
 common = { path = "../common" }
 indexing = { path = "../indexing" }
-stoppable_rayon = { path = "../stoppable_rayon" }
 
 [lints]
 workspace = true

@@ -8,6 +8,7 @@ use base::always_equal::AlwaysEqual;
 use base::distance::Distance;
 use base::index::*;
 use base::operator::*;
+use base::parallelism::Parallelism;
 use base::scalar::impossible::Impossible;
 use base::scalar::ScalarLike;
 use base::search::*;
@@ -29,6 +30,7 @@ pub struct RabitqQuantizer<O: OperatorRabitqQuantization> {
 
 impl<O: OperatorRabitqQuantization> Quantizer<O> for RabitqQuantizer<O> {
     fn train(
+        _: &impl Parallelism,
         vector_options: VectorOptions,
         _: Option<QuantizationOptions>,
         _: &(impl Vectors<O::Vector> + Sync),
